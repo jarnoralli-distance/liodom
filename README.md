@@ -35,17 +35,63 @@ If you use this code, please cite as:
 # Installation
 
 ## Prerequisites
-- Tested on [Ubuntu 64-bit 20.04](http://ubuntu.com/download/desktop)
-- Tested on [ROS Noetic](http://wiki.ros.org/ROS/Installation)
-- [Ceres](http://ceres-solver.org/installation.html)
-- [PCL](http://pointclouds.org/)
+
+- Tested on [Ubuntu 64-bit 24.04](http://ubuntu.com/download/desktop)
+- Tested on [ROS2 Kilted](https://docs.ros.org/en/kilted/index.html)
+- [CMake 3.28.3](https://cmake.org/download/)
+- [Conan 2](https://conan.io/)
+    - Conan is used for handling 3rd party libraries
+
+## Installing Prerequisites
+
+First install ROS 2, Python, build-essential, cmake and Python packages using `apt`:
+
+```bash
+sudo apt-get install ros-kilted-desktop ros-kilted-pcl-ros \
+    build-essential python3 python-is-python3 pipx cmake
+```
+
+After that install Conan and detect what compilers have been installed:
+
+```bash
+pipx install conan
+conan profile detect
+```
 
 ## Build
+
+Create a workspace and clone `liodom`:
+
+```bash
+mkdir my_workspace/src
+cd my_workspace/src
+git clone https://github.com/emiliofidalgo/liodom.git
+git checkout ros2v2
 ```
-  cd ~/your_workspace/src
-  git clone https://github.com/emiliofidalgo/liodom.git
-  cd ..
-  catkin_make -DCMAKE_BUILD_TYPE=Release
+
+Install Conan packages. When running this for the first time, it will take some time to build the packages (unless pre-built
+binaries exist). Built binaries are stored in a local cache, so when running for the second time, pre-built binaries are used:
+
+```bash
+cd my_workspace
+conan install src/liodom --output-folder=build/liodom --build=missing
+```
+
+And finally build the binaries:
+
+```bash
+colcon build --packages-select liodom \
+    --cmake-args \
+        -DCMAKE_TOOLCHAIN_FILE=${PWD}/build/liodom/conan_toolchain.cmake \
+        -DCMAKE_BUILD_TYPE=Release
+```
+
+The toolchain file `conan_toolchain.cmake` tells CMake where Conan binaries can be found so that `find_package` works correctly. Above
+command installs the package in `my_workspace/install`. In order to make the installed packages visible to the system, run the following:
+
+```bash
+cd my_workspace
+source install/setup.bash
 ```
 
 # Usage
@@ -64,4 +110,5 @@ Reducing the values of these parameters may speed up LiODOM, sacrificing accurac
 If you have problems or questions using this code, please contact the author (emilio.garcia@uib.es). [Feature requests](http://github.com/emiliofidalgo/liodom/issues) and [contributions](http://github.com/emiliofidalgo/liodom/pulls) are totally welcome.
 
 # Acknowledgements
-Thanks to the authors of [A-LOAM](https://github.com/HKUST-Aerial-Robotics/A-LOAM) and [F-LOAM](https://github.com/wh200720041/floam) for publishing their codes. Some parts of this library are inspired from them.
+Thanks to the authors of [A-LOAM](https://github.com/HKUST-Aerial-Robotics/A-LOAM) and [F-LOAM](https://github.com/wh200720041/floam) for publishing their codes. Some parts of this library are inspired by those code bases.
+
