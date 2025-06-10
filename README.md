@@ -39,16 +39,28 @@ If you use this code, please cite as:
 - Tested on [Ubuntu 64-bit 24.04](http://ubuntu.com/download/desktop)
 - Tested on [ROS2 Kilted](https://docs.ros.org/en/kilted/index.html)
 - [CMake 3.28.3](https://cmake.org/download/)
-- [Conan 2](https://conan.io/)
+- [Conan 2.17](https://conan.io/)
     - Conan is used for handling 3rd party libraries
+
+## Adding ROS 2 Packages
+
+First add ROS 2 to APT sources:
+
+```bash
+sudo apt install software-properties-common
+sudo add-apt-repository universe
+sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.asc -o /etc/apt/trusted.gpg.d/ros.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/trusted.gpg.d/ros.asc] http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+sudo apt update
+```
 
 ## Installing Prerequisites
 
 First install ROS 2, Python, build-essential, cmake and Python packages using `apt`:
 
 ```bash
-sudo apt-get install ros-kilted-desktop ros-kilted-pcl-ros \
-    build-essential python3 python-is-python3 pipx cmake
+sudo apt-get install ros-kilted-desktop ros-kilted-pcl-ros ros-kilted-pcl-conversions ros-kilted-ament-cmake \
+    build-essential python3 python-is-python3 python3-colcon-common-extensions pipx cmake libudev-dev
 ```
 
 After that install Conan and detect what compilers have been installed:
@@ -66,11 +78,13 @@ Create a workspace and clone `liodom`:
 mkdir my_workspace/src
 cd my_workspace/src
 git clone https://github.com/emiliofidalgo/liodom.git
-git checkout ros2v2
 ```
 
-Install Conan packages. When running this for the first time, it will take some time to build the packages (unless pre-built
-binaries exist). Built binaries are stored in a local cache, so when running for the second time, pre-built binaries are used:
+After having cloned the repository, checkout the correct branch. At the time of writing this document, ROS 2 version is in branch `ros2`.
+
+Once you have cloned the repository, and checked out the correct branch, you need to install the 3rd party libraries using Conan.
+When running this for the first time, it will take some time to build the packages (unless pre-built binaries exist).
+Built binaries are stored in a local cache, so when running for the second time, these are used:
 
 ```bash
 cd my_workspace
@@ -80,6 +94,7 @@ conan install src/liodom --output-folder=build/liodom --build=missing
 And finally build the binaries:
 
 ```bash
+source /opt/ros/kilted/setup.bash
 colcon build --packages-select liodom \
     --cmake-args \
         -DCMAKE_TOOLCHAIN_FILE=${PWD}/build/liodom/conan_toolchain.cmake \
@@ -110,5 +125,6 @@ Reducing the values of these parameters may speed up LiODOM, sacrificing accurac
 If you have problems or questions using this code, please contact the author (emilio.garcia@uib.es). [Feature requests](http://github.com/emiliofidalgo/liodom/issues) and [contributions](http://github.com/emiliofidalgo/liodom/pulls) are totally welcome.
 
 # Acknowledgements
+
 Thanks to the authors of [A-LOAM](https://github.com/HKUST-Aerial-Robotics/A-LOAM) and [F-LOAM](https://github.com/wh200720041/floam) for publishing their codes. Some parts of this library are inspired by those code bases.
 
