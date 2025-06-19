@@ -190,6 +190,8 @@ void LaserOdometer::operator()(std::atomic<bool>& running) {
 
         // Updating the initial guess
         Eigen::Quaterniond q_curr(odom_.rotation());
+        q_curr.normalize();
+
         param_q[0] = q_curr.x();
         param_q[1] = q_curr.y();
         param_q[2] = q_curr.z();
@@ -407,6 +409,8 @@ void LaserOdometer::publishOdom(const std_msgs::msg::Header& header, const Eigen
   // Transform to base_link frame before publication
   Eigen::Isometry3d odom_base_link = pose * laser_to_base_;
   Eigen::Quaterniond q_current(odom_base_link.rotation());
+  q_current.normalize();
+
   Eigen::Vector3d t_current = odom_base_link.translation();
   //Filling pose
   laser_odom_msg.pose.pose.orientation.x = q_current.x();
