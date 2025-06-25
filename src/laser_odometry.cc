@@ -167,7 +167,7 @@ void LaserOdometer::operator()(std::atomic<bool>& running) {
           imu_m.getRPY(imu_roll, imu_pitch, imu_yaw);
 
           //2.- rotate odom to frame baselink and get the orientation
-          Eigen::Isometry3d odom_bl = odom_ * laser_to_base_;
+          Eigen::Isometry3d odom_bl = odom_ ;
           Eigen::Quaterniond odom_ori_bl(odom_bl.rotation());
           tf2::Quaternion odom_bl_quat(odom_ori_bl.x(), odom_ori_bl.y(), odom_ori_bl.z(), odom_ori_bl.w());
           tf2::Matrix3x3 odom_bl_m(odom_bl_quat);
@@ -185,7 +185,7 @@ void LaserOdometer::operator()(std::atomic<bool>& running) {
           odom_bl.linear() = odom_ori_bl.toRotationMatrix();
 
           //5.- rotate odom back to frame laser
-          odom_ = odom_bl * (laser_to_base_.inverse());
+          odom_ = odom_bl;
         }
 
         // Updating the initial guess
