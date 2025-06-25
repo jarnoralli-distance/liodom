@@ -53,11 +53,11 @@ std::shared_ptr<tf2_ros::Buffer> tf_buffer;
 
 using namespace std::chrono_literals;
 
-void lidarClb(const sensor_msgs::msg::PointCloud2::SharedPtr lidar_msg) {
+void lidarClb(const sensor_msgs::msg::PointCloud2::SharedPtr edge_lidar_msg) {
   
   // Converting ROS message to PCL
   liodom::PointCloud::Ptr pc_new(new liodom::PointCloud);
-  pcl::fromROSMsg(*lidar_msg, *pc_new);
+  pcl::fromROSMsg(*edge_lidar_msg, *pc_new);
   RCLCPP_INFO(node->get_logger(), "Received cloud with %lu points.", pc_new->points.size());
 
   // Waiting for the current position
@@ -66,7 +66,7 @@ void lidarClb(const sensor_msgs::msg::PointCloud2::SharedPtr lidar_msg) {
     transform = tf_buffer->lookupTransform(
       fixed_frame,
       base_frame,
-      lidar_msg->header.stamp,
+      edge_lidar_msg->header.stamp,
       rclcpp::Duration(5.0, 0));
   } catch (const tf2::TransformException& ex) {    
     RCLCPP_WARN(node->get_logger(), "Could not get transform from %s to %s: %s", fixed_frame.c_str(), base_frame.c_str(), ex.what());
@@ -85,7 +85,7 @@ void lidarClb(const sensor_msgs::msg::PointCloud2::SharedPtr lidar_msg) {
     sensor_msgs::msg::PointCloud2 cloud_msg;
     pcl::toROSMsg(*map, cloud_msg);
     cloud_msg.header.frame_id = fixed_frame;
-    cloud_msg.header.stamp = lidar_msg->header.stamp;
+    cloud_msg.header.stamp = edge_lidar_msg->header.stamp;
     pc_pub->publish(cloud_msg);
   }
 
@@ -95,7 +95,7 @@ void lidarClb(const sensor_msgs::msg::PointCloud2::SharedPtr lidar_msg) {
     sensor_msgs::msg::PointCloud2 cloud_msg;
     pcl::toROSMsg(*map, cloud_msg);
     cloud_msg.header.frame_id = fixed_frame;
-    cloud_msg.header.stamp = lidar_msg->header.stamp;
+    cloud_msg.header.stamp = edge_lidar_msg->header.stamp;
     pc_pub_local->publish(cloud_msg);
   }
 
@@ -126,7 +126,7 @@ int main(int argc, char** argv) {
   node->declare_parameter("voxel_xysize", 40.0);
   node->declare_parameter("voxel_zsize", 50.0);
   node->declare_parameter("resolution", 0.4);
-  node->declare_parameter("fixed_frame", std::string("world"));
+  node->declare_parameter("fixed_frame", std::string("odom"));
   node->declare_parameter("base_frame", std::string("base_link"));
   node->declare_parameter("cells_xy", 2);
   node->declare_parameter("cells_z", 2);
