@@ -379,8 +379,8 @@ bool LaserOdometer::getBaseToLaserTf (const std::string& frame_id) {
   try {
     rclcpp::Time now = nh_->get_clock()->now();
     laser_to_base_tf = tf_buffer_->lookupTransform(
-      frame_id,
-      params->base_frame_,
+      params->base_frame_, // target frame
+      frame_id,  // source frame
       now,
       rclcpp::Duration(2.0, 0));
   } catch (const tf2::TransformException & ex) {
@@ -407,7 +407,7 @@ void LaserOdometer::publishOdom(const std_msgs::msg::Header& header, const Eigen
   laser_odom_msg.child_frame_id = params->base_frame_;
   laser_odom_msg.header.stamp = header.stamp;
   // Transform to base_link frame before publication
-  Eigen::Isometry3d odom_base_link = pose * laser_to_base_;
+  Eigen::Isometry3d odom_base_link = laser_to_base_* pose ;
   Eigen::Quaterniond q_current(odom_base_link.rotation());
   q_current.normalize();
 
@@ -422,7 +422,7 @@ void LaserOdometer::publishOdom(const std_msgs::msg::Header& header, const Eigen
   laser_odom_msg.pose.pose.position.z = t_current.z();
   //Filling twist
   double delta_time = rclcpp::Time(header.stamp).seconds() - prev_stamp_;
-  Eigen::Isometry3d delta_odom = ((prev_odom_ * laser_to_base_).inverse() * odom_base_link);
+  Eigen::Isometry3d delta_odom = ((laser_to_base_*prev_odom_ ).inverse() * odom_base_link);
   Eigen::Vector3d t_delta = delta_odom.translation();
   laser_odom_msg.twist.twist.linear.x = t_delta.x() / delta_time;
   laser_odom_msg.twist.twist.linear.y = t_delta.y() / delta_time;
