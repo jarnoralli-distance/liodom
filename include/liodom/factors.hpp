@@ -120,6 +120,58 @@ struct Point2LineFactor {
 	double max_dist_;
 };
 
+
+using RoadRect = std::array<Eigen::Vector3d, 4>;
+
+struct RoadFactor {
+  RoadFactor(const RoadRect& road_rect) : road_rect_(road_rect) {}
+	template <typename T>
+	bool operator()(const T* const t, T* residual) const {
+		// Ignore the Z a
+
+		T px = t[0];
+		T py = t[1];
+
+		T min_x = std::min({ T(road_rect_[0].x()), T(road_rect_[1].x()), T(road_rect_[2].x()), T(road_rect_[3].x()) });
+		T max_x = std::max({ T(road_rect_[0].x()), T(road_rect_[1].x()), T(road_rect_[2].x()), T(road_rect_[3].x()) });
+
+		T min_y = std::min({ T(road_rect_[0].y()), T(road_rect_[1].y()), T(road_rect_[2].y()), T(road_rect_[3].y()) });
+		T max_y = std::max({ T(road_rect_[0].y()), T(road_rect_[1].y()), T(road_rect_[2].y()), T(road_rect_[3].y()) });
+
+		// if (px >= min_x && px <= max_x &&
+		// 	py >= min_y && py <= max_y) {
+		// 	residual[0] = T(0.0);  // inside
+		// } else {
+		// 	residual[0] = T(10000000.0);  // outside
+		// }
+		residual[0] = T(0.0);
+		if (px < min_x)
+			residual[0] += min_x - px;
+		else if (px > max_x)
+			residual[0] += px - max_x;
+		else if (py < min_y)
+			residual[0] += min_y - py;
+		else if (py > max_y)
+			residual[0] += py - max_y;
+			
+
+
+		return true;
+		}
+
+
+  static ceres::CostFunction* create(const RoadRect& road_rect) {
+    return new ceres::AutoDiffCostFunction<RoadFactor, 1, 3>(
+      new RoadFactor(road_rect)
+    );
+  }
+
+  RoadRect road_rect_;
+};
+
+
+
+
 }  // namespace liodom
 
 #endif // INCLUDE_LIODOM_FACTORS_HPP

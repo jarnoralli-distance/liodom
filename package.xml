@@ -23,6 +23,7 @@
   <depend>tf2</depend>
   <depend>tf2_eigen</depend>
   <depend>tf2_ros</depend>
+  <depend>visualization_msgs</depend>
 
   <!-- PCL-related -->
   <depend>pcl_conversions</depend>
