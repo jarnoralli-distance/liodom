@@ -202,6 +202,8 @@ void LaserOdometer::operator()(std::atomic<bool>& running) {
         param_t[1] = t_curr.y();
         param_t[2] = t_curr.z();
 
+        //Get Marker
+        liodom::RoadSegment road_marker = sdata->getLastMarkerRect();
         // Optimize the current pose
         for (int optim_it = 0; optim_it < 2; optim_it++) {
           
@@ -215,6 +217,7 @@ void LaserOdometer::operator()(std::atomic<bool>& running) {
 
           // Adding constraints
           addEdgeConstraints(feats, local_map_gen, local_map_rec, odom_, &problem, loss_function);
+          addRoadConstraints(road_marker, odom_, &problem);
 
           // Solving the optimization problem
           ceres::Solver::Options options;
@@ -305,12 +308,34 @@ void LaserOdometer::computeLocalMap(PointCloud::Ptr& local_map_gen, PointCloud::
   RCLCPP_DEBUG(nh_->get_logger(), "Local Map points - Generated: %lu", gen_local_map_->size());
 }
 
+void LaserOdometer::addRoadConstraints(  const liodom::RoadSegment& rect,  const Eigen::Isometry3d& pose,  ceres::Problem* problem){
+
+  if (rect.ratio > 3.0) {
+      RCLCPP_DEBUG(nh_->get_logger(), " Marker Ratio: %2.2f", rect.ratio );
+
+    // Transform rectangle points to world coordinates using pose
+    RoadRect transformed_rect = {
+       pose*Eigen::Vector3d(rect.p1.x, rect.p1.y, rect.p1.z),
+      pose*Eigen::Vector3d(rect.p2.x, rect.p2.y, rect.p2.z),
+       pose*Eigen::Vector3d(rect.p3.x, rect.p3.y, rect.p3.z),
+      pose* Eigen::Vector3d(rect.p4.x, rect.p4.y, rect.p4.z)
+    };
+    
+    // Create and add the cost function
+    ceres::CostFunction* cost_function = RoadFactor::create(transformed_rect);
+    problem->AddResidualBlock(cost_function, nullptr, param_t);
+
+  }
+}
+
+
 void LaserOdometer::addEdgeConstraints(const PointCloud::Ptr& edges,
                         const PointCloud::Ptr& local_map_gen,
                         const PointCloud::Ptr& local_map_rec,
                         const Eigen::Isometry3d& pose,
                         ceres::Problem* problem,
                         ceres::LossFunction* loss) {
+
   // Translate edges
   PointCloud::Ptr edges_map(new PointCloud);
   pcl::transformPointCloud(*edges, *edges_map, pose.matrix());
@@ -364,7 +389,11 @@ void LaserOdometer::addEdgeConstraints(const PointCloud::Ptr& edges,
                              local_map->points[indices[1]].y,
                              local_map->points[indices[1]].z);
 
+                             
+
         ceres::CostFunction* cost_function = Point2LineFactor::create(curr_point, pt_a, pt_b, params->min_range_, params->max_range_);
+        
+
         problem->AddResidualBlock(cost_function, loss, param_q, param_t);
       }
     }

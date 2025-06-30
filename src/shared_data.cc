@@ -116,4 +116,17 @@ void SharedData::getLastIMUOri(Eigen::Quaterniond& imu_ori){
   imu_mutex_.unlock();
 }
 
+
+void SharedData::setLastMarkerRect(const RoadSegment& rect) {
+  
+  std::lock_guard<std::mutex> lock(marker_mutex_);
+  last_marker_rect_ = rect;
+}
+
+RoadSegment SharedData::getLastMarkerRect() {
+  std::lock_guard<std::mutex> lock(marker_mutex_);
+  return last_marker_rect_;
+}
+
+
 }  // namespace liodom

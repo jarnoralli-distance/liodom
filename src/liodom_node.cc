@@ -24,6 +24,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <visualization_msgs/msg/marker.hpp>
 
 // PCL
 #include <pcl_conversions/pcl_conversions.h>
@@ -59,6 +60,36 @@ void lidarClb(const sensor_msgs::msg::PointCloud2::SharedPtr lidar_msg) {
 
   sdata->pushPointCloud(pc_new, lidar_msg->header);
 }
+double distance(const geometry_msgs::msg::Point& a, const geometry_msgs::msg::Point& b) {
+  return std::sqrt(
+    std::pow(a.x - b.x, 2) +
+    std::pow(a.y - b.y, 2) +
+    std::pow(a.z - b.z, 2)
+  );
+}
+
+void markerCallback(const visualization_msgs::msg::Marker::SharedPtr marker_msg) {
+  if (marker_msg->points.size() >= 4) {
+    liodom::RoadSegment rect;
+    rect.p1 = marker_msg->points[0];
+    rect.p2 = marker_msg->points[1];
+    rect.p3 = marker_msg->points[2];
+    rect.p4 = marker_msg->points[3];
+
+    double width = distance(rect.p1, rect.p2);
+    double height = distance(rect.p2, rect.p3);
+
+    if (height > 0.0001) {  // avoid division by zero
+      rect.ratio = width / height;
+    } else {
+      rect.ratio = 0.0;  // or std::numeric_limits<double>::infinity();
+    }
+
+    sdata->setLastMarkerRect(rect);
+  }
+}
+
+
 
 void mapClb(const sensor_msgs::msg::PointCloud2::SharedPtr map_msg) {
   
@@ -104,6 +135,7 @@ int main(int argc, char** argv) {
   // Subscribers  
   auto pc_subs_ = node->create_subscription<sensor_msgs::msg::PointCloud2>("points", 1, lidarClb);
   auto map_subs_ = node->create_subscription<sensor_msgs::msg::PointCloud2>("map", 1, mapClb);
+  auto road_subs_ = node->create_subscription<visualization_msgs::msg::Marker>("road", 1, markerCallback);
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_subs_;
   if (params->use_imu_) {
     imu_subs_ = node->create_subscription<sensor_msgs::msg::Imu>("imu", 1, imuClb);

@@ -121,6 +121,9 @@ class LaserOdometer {
                           const Eigen::Isometry3d& pose,
                           ceres::Problem* problem,
                           ceres::LossFunction* loss);
+  void addRoadConstraints(const liodom::RoadSegment& rect ,
+                        const Eigen::Isometry3d& pose,
+                        ceres::Problem* problem);
   bool getBaseToLaserTf(const std::string& frame_id);
   void publishOdom(const std_msgs::msg::Header& header, const Eigen::Isometry3d& pose);
 };

@@ -25,12 +25,22 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/header.hpp>
+#include <geometry_msgs/msg/point.hpp>
 
 #include <pcl/common/io.h>
 
 #include <liodom/defs.h>
 
 namespace liodom {
+  
+struct RoadSegment {
+  geometry_msgs::msg::Point p1;
+  geometry_msgs::msg::Point p2;
+  geometry_msgs::msg::Point p3;
+  geometry_msgs::msg::Point p4;
+  double ratio;  // width / height (aspect ratio)
+
+};
 
 // Singleton class to manage shared data
 class SharedData {
@@ -50,6 +60,9 @@ class SharedData {
 
     void setLastIMUOri(Eigen::Quaterniond& imu_ori);
     void getLastIMUOri(Eigen::Quaterniond& imu_ori);
+
+    void setLastMarkerRect(const RoadSegment& rect);
+    RoadSegment getLastMarkerRect();
 
   private:
     // Controlling the singleton
@@ -73,6 +86,10 @@ class SharedData {
     // Last IMU control
     std::mutex imu_mutex_;
     Eigen::Quaterniond last_IMU_ori_;    
+
+    // Last rectangle
+    std::mutex marker_mutex_;
+    RoadSegment last_marker_rect_;
 
   protected:
     SharedData() : local_map_(new PointCloud) {};
