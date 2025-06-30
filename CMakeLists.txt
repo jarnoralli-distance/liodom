@@ -33,6 +33,8 @@ find_package(tf2_eigen REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(pcl_ros REQUIRED)
+find_package(visualization_msgs REQUIRED)
+
 
 ###########
 ## Build ##
@@ -63,7 +65,9 @@ target_link_libraries(
         ${std_msgs_TARGETS}
         ${geometry_msgs_TARGETS}
         ${nav_msgs_TARGETS}
+        ${visualization_msgs_TARGETS}
         sensor_msgs::sensor_msgs_library
+        
         tf2::tf2
         tf2_ros::tf2_ros
         pcl_conversions::pcl_conversions
