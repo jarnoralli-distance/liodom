@@ -101,8 +101,8 @@ void Map::updateMap(const PointCloud::Ptr& pc_in, const Eigen::Isometry3d& pose)
 
 		// Compute the corresponding cell
     int voxel_x = int(std::floor(point.x * inv_voxel_xysize_) * voxel_xysize_ + (voxel_xysize_half_));
-    int voxel_y = int(std::floor(point.y * inv_voxel_xysize_) * voxel_xysize_ + (voxel_xysize_half_));
-    int voxel_z = int(std::floor(point.z * inv_voxel_zsize_) * voxel_zsize_ + (voxel_zsize_half_));
+    int voxel_y = int(std::floor(point.z * inv_voxel_xysize_) * voxel_xysize_ + (voxel_xysize_half_));
+    int voxel_z = int(std::floor(point.y * inv_voxel_zsize_) * voxel_zsize_ + (voxel_zsize_half_));
     
     // Check if the voxel is already in the map
     HashKey key(voxel_x, voxel_y, voxel_z);
@@ -144,10 +144,10 @@ PointCloud::Ptr Map::getLocalMap(const Eigen::Isometry3d& pose, int cells_xy, in
   int x = pose.translation().x();
   int voxel_x = int(std::floor(x * inv_voxel_xysize_) * voxel_xysize_ + (voxel_xysize_half_));
 
-  int y = pose.translation().y();
+  int y = pose.translation().z();
   int voxel_y = int(std::floor(y * inv_voxel_xysize_) * voxel_xysize_ + (voxel_xysize_half_));
 
-  int z = pose.translation().z();
+  int z = pose.translation().y();
   int voxel_z = int(std::floor(z * inv_voxel_zsize_) * voxel_zsize_ + (voxel_zsize_half_));
 
   // Final local map
