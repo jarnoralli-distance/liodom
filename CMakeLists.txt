@@ -34,6 +34,12 @@ find_package(tf2_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(pcl_ros REQUIRED)
 
+#Lanelet2 dependencies
+find_package(lanelet2_core REQUIRED)
+find_package(lanelet2_io REQUIRED)
+find_package(lanelet2_projection REQUIRED)
+find_package(lanelet2_matching REQUIRED)
+
 ###########
 ## Build ##
 ###########
@@ -70,6 +76,10 @@ target_link_libraries(
         PCL::PCL
         Ceres::ceres
         OpenMP::OpenMP_CXX
+        lanelet2_core::lanelet2_core
+        lanelet2_io::lanelet2_io
+        lanelet2_projection::lanelet2_projection
+        lanelet2_matching::lanelet2_matching
 )
 
 #### Laser Mapping ####

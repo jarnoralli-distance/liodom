@@ -58,6 +58,19 @@
 #include <liodom/shared_data.h>
 #include <liodom/stats.h>
 
+
+//lanelet
+#include <lanelet2_core/primitives/Lanelet.h>
+#include <lanelet2_core/LaneletMap.h>
+
+#include <lanelet2_core/primitives/Point.h>
+#include <lanelet2_core/geometry/Point.h>
+#include <lanelet2_core/geometry/Polygon.h>
+#include <lanelet2_io/Io.h>
+// #include <lanelet2_io/IoHelpers.h>
+#include <lanelet2_projection/UTM.h>
+#include <lanelet2_matching/LaneletMatching.h>
+// #include <lanelet2_matching/Matching.h>
 namespace liodom {
 
 // Local Map manager
