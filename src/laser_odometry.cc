@@ -53,7 +53,7 @@ void LocalMapManager::addPointCloud(const PointCloud::Ptr& pc) {
     extract.setIndices(indices);
     extract.setNegative(true);
     extract.filter(*total_points_);
-
+  
     // Reducing the number of frames
     nframes_--;
   }
@@ -99,6 +99,14 @@ LaserOdometer::LaserOdometer(const rclcpp::Node::SharedPtr& nh) :
   // TF listener
   tf_buffer_ = std::make_unique<tf2_ros::Buffer>(nh_->get_clock());
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+
+  //Load lanlet map and projector
+  // std::string map_path = "/home/joaquinecc/Documents/dataset/kitti/dataset/map/02/lanelet2_seq_02.osm";
+  // projector_ = std::make_shared<lanelet::projection::UtmProjector>(lanelet::Origin({48.987607723096, 8.4697469732634}));
+
+  std::string map_path = "/home/joaquinecc/Documents/dataset/kitti/dataset/map/00/lanelet2_seq_00.osm";
+  projector_ = std::make_shared<lanelet::projection::UtmProjector>(lanelet::Origin({48.98254523586602, 8.39036610004500}));
+  lanelet_map_= lanelet::load(map_path, *projector_);
 }
 
 LaserOdometer::~LaserOdometer() {
@@ -233,7 +241,27 @@ void LaserOdometer::operator()(std::atomic<bool>& running) {
           Eigen::Quaterniond q_new(param_q[3], param_q[0], param_q[1], param_q[2]);
           odom_.linear() = q_new.toRotationMatrix();
           odom_.translation() = Eigen::Vector3d(param_t[0], param_t[1], param_t[2]);
-        }        
+        }      
+
+      RCLCPP_INFO(nh_->get_logger(), "before lanlet New param_t: [%f, %f, %f]", param_t[0], param_t[1], param_t[2]);
+
+
+        ceres::Problem::Options problem_options_lanelet;
+        ceres::Problem problem_lanelet(problem_options_lanelet);
+        problem_lanelet.AddParameterBlock(param_t, 3);
+
+        addLaneletConstraints(odom_, &problem_lanelet, new ceres::HuberLoss(1.0));
+
+
+        ceres::Solver::Options options_lanelet;
+        options_lanelet.linear_solver_type = ceres::DENSE_QR;
+        options_lanelet.max_num_iterations = 10;
+        options_lanelet.minimizer_progress_to_stdout = true;
+        ceres::Solver::Summary summary_lanelet;
+        ceres::Solve(options_lanelet, &problem_lanelet, &summary_lanelet);
+        odom_.translation() = Eigen::Vector3d(param_t[0], param_t[1], param_t[2]);
+        
+      RCLCPP_INFO(nh_->get_logger(), "After lanlet New param_t: [%f, %f, %f]", param_t[0], param_t[1], param_t[2]);
 
         // Compute the position of the detectd edges according to the final estimate position
         PointCloud::Ptr edges_map(new PointCloud);
@@ -303,6 +331,81 @@ void LaserOdometer::computeLocalMap(PointCloud::Ptr& local_map_gen, PointCloud::
   }
   local_map_gen = gen_local_map_;
   RCLCPP_DEBUG(nh_->get_logger(), "Local Map points - Generated: %lu", gen_local_map_->size());
+}
+void LaserOdometer::addLaneletConstraints(const Eigen::Isometry3d& pose,
+                          ceres::Problem* problem,
+                          ceres::LossFunction* loss){
+
+    // Get the translation vector from the pose
+    Eigen::Vector3d translation_vector = pose.translation();
+
+    // Find the closest lane segment
+    double min_distance = std::numeric_limits<double>::max();
+    Eigen::Vector2d closest_point, closest_segment_b;
+    
+    // Apply rotation to translation vector before the loop
+    Eigen::Vector2d translation_2d(translation_vector.x(), translation_vector.y());
+    
+    // Define rotation matrix for 35 degrees (similar to Python example)
+    double angle = 60.0;
+    double rotation_angle = angle * (M_PI / 180.0);
+    double cos_angle = std::cos(rotation_angle);
+    double sin_angle = std::sin(rotation_angle);
+    
+    Eigen::Matrix2d R_M;
+    R_M << cos_angle, -sin_angle,
+            sin_angle, cos_angle;
+    
+    translation_2d = R_M * translation_2d;
+    
+    for (const auto& lanelet : lanelet_map_->laneletLayer) {
+        // Get the centerline of the lanelet
+        auto centerline = lanelet.centerline();
+        
+        // Check each point of the centerline
+        for (size_t i = 0; i < centerline.size(); ++i) {
+            const auto& point = centerline[i];
+            
+            // Create 2D vector for the point
+            Eigen::Vector2d lane_point(point.x(), point.y());
+            
+            // Calculate distance from current position to this lane point
+            double distance = (translation_2d - lane_point).norm();
+            
+            if (distance < min_distance) {
+                min_distance = distance;
+                closest_point = lane_point;
+            }
+        }
+    }
+    
+    // Rotate the closest point by -35 degrees
+    double reverse_rotation_angle = -angle * (M_PI / 180.0);
+    double reverse_cos_angle = std::cos(reverse_rotation_angle);
+    double reverse_sin_angle = std::sin(reverse_rotation_angle);
+    
+    Eigen::Matrix2d R_M_reverse;
+    R_M_reverse << reverse_cos_angle, -reverse_sin_angle,
+                   reverse_sin_angle, reverse_cos_angle;
+    
+    Eigen::Vector2d rotated_closest_point = R_M_reverse * closest_point;
+    
+
+    // RCLCPP_INFO(nh_->get_logger(), "Original position: (%f, %f)", translation_vector.x(), translation_vector.y());
+    // RCLCPP_INFO(nh_->get_logger(), "Current position: (%f, %f)", translation_2d.x(), translation_2d.y()); 
+
+    // RCLCPP_INFO(nh_->get_logger(), "Closest lane segment: (%f, %f)", closest_point.x(), closest_point.y());
+    RCLCPP_INFO(nh_->get_logger(), "Rotated closest point: (%f, %f)", rotated_closest_point.x(), rotated_closest_point.y());
+
+    
+    RCLCPP_INFO(nh_->get_logger(), "Distance to lane: %f", min_distance);
+
+    // Create cost function with the closest lane segment only if distance is less than 2 meters
+    if (min_distance < 1.5 && min_distance > 0.5) {
+        RCLCPP_INFO(nh_->get_logger(), "Adding lanelet constraint");
+        ceres::CostFunction* cost_function = LaneletFactor::create(rotated_closest_point);
+        problem->AddResidualBlock(cost_function, loss, param_t);
+    }
 }
 
 void LaserOdometer::addEdgeConstraints(const PointCloud::Ptr& edges,

@@ -120,6 +120,44 @@ struct Point2LineFactor {
 	double max_dist_;
 };
 
+struct LaneletFactor {
+  LaneletFactor(const Eigen::Vector2d& closest_point) 
+    : closest_point_(closest_point) {}
+
+  template<typename T>
+  bool operator()(const T* t, T* residual) const {
+    // Apply 35-degree rotation to current position
+    // T rotation_angle = T(35.0 * M_PI / 180.0);
+    // T cos_angle = ceres::cos(rotation_angle);
+    // T sin_angle = ceres::sin(rotation_angle);
+    
+    // T px = t[0] * cos_angle - t[1] * sin_angle;
+    // T py = t[0] * sin_angle + t[1] * cos_angle;
+    
+    T px = t[0];
+    T py = t[1];
+    // Closest lane point
+    T cx = T(closest_point_.x());
+    T cy = T(closest_point_.y());
+    
+    // Calculate distance between current position and closest lane point
+    T dx = px - cx;
+    T dy = py - cy;
+    T distance = ceres::sqrt(dx * dx + dy * dy);
+    
+    // Return distance as residual
+    residual[0] = distance;
+    
+    return true;
+  }
+
+	static ceres::CostFunction* create(const Eigen::Vector2d& closest_point) {
+    return new ceres::AutoDiffCostFunction<LaneletFactor, 1, 3>(
+      new LaneletFactor(closest_point));
+  }
+
+  Eigen::Vector2d closest_point_;
+};
 }  // namespace liodom
 
 #endif // INCLUDE_LIODOM_FACTORS_HPP

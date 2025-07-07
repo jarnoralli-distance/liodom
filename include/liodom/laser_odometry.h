@@ -106,7 +106,8 @@ class LaserOdometer {
   std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
-
+  std::shared_ptr<lanelet::LaneletMap> lanelet_map_ ;
+  std::shared_ptr<lanelet::projection::UtmProjector> projector_;
   // Variables
   bool init_;
   Eigen::Isometry3d prev_odom_;
@@ -126,6 +127,7 @@ class LaserOdometer {
   int num_freqs_;
   double last_in_time_secs_;
   double last_out_time_secs_;
+  lanelet::Id current_lanelet_id_;
 
   void computeLocalMap(PointCloud::Ptr& local_map_gen, PointCloud::Ptr& local_map_rec);
   void addEdgeConstraints(const PointCloud::Ptr& edges,
@@ -136,6 +138,9 @@ class LaserOdometer {
                           ceres::LossFunction* loss);
   bool getBaseToLaserTf(const std::string& frame_id);
   void publishOdom(const std_msgs::msg::Header& header, const Eigen::Isometry3d& pose);
+  void addLaneletConstraints(const Eigen::Isometry3d& pose,
+                          ceres::Problem* problem,
+                          ceres::LossFunction* loss);
 };
 
 }  // namespace liodom
