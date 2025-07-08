@@ -243,25 +243,28 @@ void LaserOdometer::operator()(std::atomic<bool>& running) {
           odom_.translation() = Eigen::Vector3d(param_t[0], param_t[1], param_t[2]);
         }      
 
-      RCLCPP_INFO(nh_->get_logger(), "before lanlet New param_t: [%f, %f, %f]", param_t[0], param_t[1], param_t[2]);
+      
 
-
-        ceres::Problem::Options problem_options_lanelet;
-        ceres::Problem problem_lanelet(problem_options_lanelet);
-        problem_lanelet.AddParameterBlock(param_t, 3);
-
-        addLaneletConstraints(odom_, &problem_lanelet, new ceres::HuberLoss(1.0));
-
-
-        ceres::Solver::Options options_lanelet;
-        options_lanelet.linear_solver_type = ceres::DENSE_QR;
-        options_lanelet.max_num_iterations = 10;
-        options_lanelet.minimizer_progress_to_stdout = true;
-        ceres::Solver::Summary summary_lanelet;
-        ceres::Solve(options_lanelet, &problem_lanelet, &summary_lanelet);
-        odom_.translation() = Eigen::Vector3d(param_t[0], param_t[1], param_t[2]);
+        // Add current pose to history first
+        pose_history_.push_back(odom_);
         
-      RCLCPP_INFO(nh_->get_logger(), "After lanlet New param_t: [%f, %f, %f]", param_t[0], param_t[1], param_t[2]);
+        // Only run alignment when pose history reaches full size
+        if (pose_history_.size() == POSE_HISTORY_SIZE) {
+          // Store the old translation before any changes
+            alignTrajectoryToLane();
+              // pose_history_.clear(); 
+            for (int i = 0; i < 10; i++) {
+                if (!pose_history_.empty()) {
+                    pose_history_.pop_front();
+                }
+            }
+
+
+        } else {
+            RCLCPP_INFO(nh_->get_logger(), "Current odom translation: [%f, %f, %f]", 
+            odom_.translation().x(), odom_.translation().y(), odom_.translation().z());
+        }
+
 
         // Compute the position of the detectd edges according to the final estimate position
         PointCloud::Ptr edges_map(new PointCloud);
@@ -332,21 +335,15 @@ void LaserOdometer::computeLocalMap(PointCloud::Ptr& local_map_gen, PointCloud::
   local_map_gen = gen_local_map_;
   RCLCPP_DEBUG(nh_->get_logger(), "Local Map points - Generated: %lu", gen_local_map_->size());
 }
-void LaserOdometer::addLaneletConstraints(const Eigen::Isometry3d& pose,
-                          ceres::Problem* problem,
-                          ceres::LossFunction* loss){
 
-    // Get the translation vector from the pose
-    Eigen::Vector3d translation_vector = pose.translation();
+void LaserOdometer::alignTrajectoryToLane() {
 
-    // Find the closest lane segment
-    double min_distance = std::numeric_limits<double>::max();
-    Eigen::Vector2d closest_point, closest_segment_b;
     
-    // Apply rotation to translation vector before the loop
-    Eigen::Vector2d translation_2d(translation_vector.x(), translation_vector.y());
+    // Initialize best lane points for each trajectory point
+    std::vector<Eigen::Vector2d> best_lane_points(pose_history_.size());
+    std::vector<double> min_distances(pose_history_.size(), std::numeric_limits<double>::max());
     
-    // Define rotation matrix for 35 degrees (similar to Python example)
+    // Define rotation matrix (same as before)
     double angle = 60.0;
     double rotation_angle = angle * (M_PI / 180.0);
     double cos_angle = std::cos(rotation_angle);
@@ -356,57 +353,109 @@ void LaserOdometer::addLaneletConstraints(const Eigen::Isometry3d& pose,
     R_M << cos_angle, -sin_angle,
             sin_angle, cos_angle;
     
-    translation_2d = R_M * translation_2d;
-    
+    // Check each lanelet
     for (const auto& lanelet : lanelet_map_->laneletLayer) {
-        // Get the centerline of the lanelet
         auto centerline = lanelet.centerline();
         
-        // Check each point of the centerline
-        for (size_t i = 0; i < centerline.size(); ++i) {
-            const auto& point = centerline[i];
-            
-            // Create 2D vector for the point
+        // Convert lane points to 2D
+        for (const auto& point : centerline) {
             Eigen::Vector2d lane_point(point.x(), point.y());
             
-            // Calculate distance from current position to this lane point
-            double distance = (translation_2d - lane_point).norm();
-            
-            if (distance < min_distance) {
-                min_distance = distance;
-                closest_point = lane_point;
+            // For each trajectory point, check if this lane point is the best neighbor
+            for (size_t i = 0; i < pose_history_.size(); ++i) {
+                Eigen::Vector2d traj_point(pose_history_[i].translation().x(), pose_history_[i].translation().y());
+                traj_point = R_M * traj_point;
+                
+                double dist = (traj_point - lane_point).norm();
+                
+                // If this is the best neighbor found so far for this trajectory point
+                if (dist < min_distances[i]) {
+                    min_distances[i] = dist;
+                    best_lane_points[i] = lane_point;
+                }
             }
         }
     }
     
-    // Rotate the closest point by -35 degrees
-    double reverse_rotation_angle = -angle * (M_PI / 180.0);
-    double reverse_cos_angle = std::cos(reverse_rotation_angle);
-    double reverse_sin_angle = std::sin(reverse_rotation_angle);
-    
-    Eigen::Matrix2d R_M_reverse;
-    R_M_reverse << reverse_cos_angle, -reverse_sin_angle,
-                   reverse_sin_angle, reverse_cos_angle;
-    
-    Eigen::Vector2d rotated_closest_point = R_M_reverse * closest_point;
-    
-
-    // RCLCPP_INFO(nh_->get_logger(), "Original position: (%f, %f)", translation_vector.x(), translation_vector.y());
-    // RCLCPP_INFO(nh_->get_logger(), "Current position: (%f, %f)", translation_2d.x(), translation_2d.y()); 
-
-    // RCLCPP_INFO(nh_->get_logger(), "Closest lane segment: (%f, %f)", closest_point.x(), closest_point.y());
-    RCLCPP_INFO(nh_->get_logger(), "Rotated closest point: (%f, %f)", rotated_closest_point.x(), rotated_closest_point.y());
-
-    
-    RCLCPP_INFO(nh_->get_logger(), "Distance to lane: %f", min_distance);
-
-    // Create cost function with the closest lane segment only if distance is less than 2 meters
-    if (min_distance < 1.5 && min_distance > 0.5) {
-        RCLCPP_INFO(nh_->get_logger(), "Adding lanelet constraint");
-        ceres::CostFunction* cost_function = LaneletFactor::create(rotated_closest_point);
-        problem->AddResidualBlock(cost_function, loss, param_t);
+    // Calculate average distance
+    double total_distance = 0.0;
+    for (double dist : min_distances) {
+        total_distance += dist;
     }
+    double avg_distance = total_distance / pose_history_.size();
+    
+    RCLCPP_INFO(nh_->get_logger(), "Found best neighbors with average distance: %f", avg_distance);
+    
+    // Prepare trajectory and lane points for ICP optimization
+    std::vector<Eigen::Vector2d> trajectory_points;
+    
+    // Add current trajectory points (in original coordinate system)
+    for (const auto& pose : pose_history_) {
+        Eigen::Vector2d traj_point(pose.translation().x(), pose.translation().y());
+        trajectory_points.push_back(traj_point);
+    }
+    
+
+    
+    // Set up Ceres optimization for ICP-like alignment
+    ceres::Problem::Options problem_options;
+    ceres::Problem problem(problem_options);
+    
+    // Parameters: [tx, ty, rotation_angle] (initialized to zero)
+    double transform_params[3] = {0.0, 0.0, 0.0};
+    problem.AddParameterBlock(transform_params, 3);
+    
+    // Add ICP cost function
+    ceres::CostFunction* icp_cost_function = ICPLaneletFactor::create(trajectory_points, best_lane_points,-angle * (M_PI / 180.0));
+    problem.AddResidualBlock(icp_cost_function, new ceres::HuberLoss(0.2), transform_params);
+    
+    // Solve the optimization
+    ceres::Solver::Options options;
+    options.linear_solver_type = ceres::DENSE_QR;
+    options.max_num_iterations = 20;
+    options.minimizer_progress_to_stdout = false;
+    ceres::Solver::Summary summary;
+    ceres::Solve(options, &problem, &summary);
+    
+    // Apply the optimized 2D transformation to current pose with distance checking
+    Eigen::Vector3d current_translation = odom_.translation();
+    
+    Eigen::Vector3d new_translation = current_translation;
+    
+
+    // Construct rotation matrix from rotation parameter
+    double new_cos_angle = std::cos(transform_params[2]);
+    double new_sin_angle = std::sin(transform_params[2]);
+    
+    // Apply rotation and translation: x' = R*x + t
+    new_translation.x() = current_translation.x() * new_cos_angle - current_translation.y() * new_sin_angle;
+    new_translation.y() = current_translation.x() * new_sin_angle + current_translation.y() * new_cos_angle;
+    
+    
+    // // Calculate the distance between current and new position
+    double distance = (new_translation - current_translation).norm();
+    double final_cost = summary.final_cost;
+    // Only apply changes if distance is less than 2 meters
+
+      RCLCPP_INFO(nh_->get_logger(), "ICP error %f and distance %f", final_cost, distance );
+
+    if ( final_cost < 0.5 and distance<1.5) {
+        odom_.translation() = new_translation;
+        
+        RCLCPP_INFO(nh_->get_logger(), "Applied ICP trajectory alignment: translation [%f, %f], rotation [%f rad]", 
+                    transform_params[0], transform_params[1], transform_params[2]);
+    } 
+         RCLCPP_INFO(nh_->get_logger(), "New translation: [%f, %f]", 
+                    new_translation.x(), new_translation.y());
+         RCLCPP_INFO(nh_->get_logger(), "OLD translation: [%f, %f]", 
+                    current_translation.x(), current_translation.y());
+
+
+    
+    // RCLCPP_INFO(nh_->get_logger(), "Applied ICP trajectory alignment: translation [%f, %f]", 
+    //             translation_params[0], translation_params[1]);
 }
+
 
 void LaserOdometer::addEdgeConstraints(const PointCloud::Ptr& edges,
                         const PointCloud::Ptr& local_map_gen,
@@ -567,6 +616,6 @@ void LaserOdometer::publishOdom(const std_msgs::msg::Header& header, const Eigen
 
     tf_broadcaster_->sendTransform(transform);
   }
-}
+}alignTrajectoryToLane
 
 }  // namespace liodom

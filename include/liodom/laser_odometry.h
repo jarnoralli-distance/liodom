@@ -22,6 +22,7 @@
 
 #include <numeric>
 #include <thread>
+#include <deque>
 
 // Ceres
 #include <ceres/ceres.h>
@@ -119,7 +120,7 @@ class LaserOdometer {
   Stats* stats;
   Params* params;
   LocalMapManager lmap_manager;
-  Eigen::Isometry3d laser_to_base_;
+  Eigen::Isometry3d laser_to_base_; 
   double in_freqs_[5];
   double out_freqs_[5];
   double mean_in_freq_;
@@ -128,6 +129,8 @@ class LaserOdometer {
   double last_in_time_secs_;
   double last_out_time_secs_;
   lanelet::Id current_lanelet_id_;
+  std::deque<Eigen::Isometry3d> pose_history_;
+  static const int POSE_HISTORY_SIZE = 50;
 
   void computeLocalMap(PointCloud::Ptr& local_map_gen, PointCloud::Ptr& local_map_rec);
   void addEdgeConstraints(const PointCloud::Ptr& edges,
@@ -141,6 +144,7 @@ class LaserOdometer {
   void addLaneletConstraints(const Eigen::Isometry3d& pose,
                           ceres::Problem* problem,
                           ceres::LossFunction* loss);
+  void alignTrajectoryToLane();
 };
 
 }  // namespace liodom
