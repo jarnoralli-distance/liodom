@@ -23,381 +23,416 @@
 
 namespace liodom {
 
-LocalMapManager::LocalMapManager(const size_t max_frames) :  
-  total_points_(new PointCloud),
-  nframes_(0),
-  max_nframes_(max_frames)
-  {
-}
-
-LocalMapManager::~LocalMapManager() {
-}
-
-void LocalMapManager::addPointCloud(const PointCloud::Ptr& pc) {
-  // Adding the current frame to the local map
-  *total_points_ += *pc;
-  nframes_++;
-  sizes_.push(pc->size());
-
-  // Removing frames at the beginning if required
-  if (nframes_ > max_nframes_) {
-    // Get the size of the first frame
-    size_t pc_size = sizes_.front();
-    sizes_.pop();
-
-    // Remove the points corresponding to the first frame
-    std::vector<int> ind(pc_size);
-    std::iota(std::begin(ind), std::end(ind), 0);
-    pcl::PointIndices::Ptr indices(new pcl::PointIndices);
-    indices->indices = ind;
-    pcl::ExtractIndices<Point> extract;
-    extract.setInputCloud(total_points_);
-    extract.setIndices(indices);
-    extract.setNegative(true);
-    extract.filter(*total_points_);
-  
-    // Reducing the number of frames
-    nframes_--;
+  LocalMapManager::LocalMapManager(const size_t max_frames) :  
+    total_points_(new PointCloud),
+    nframes_(0),
+    max_nframes_(max_frames)
+    {
   }
-}
 
-size_t LocalMapManager::getLocalMap(PointCloud::Ptr& map) {
-  map = total_points_;
-  return nframes_;
-}
-
-void LocalMapManager::setMaxFrames(const size_t max_nframes) {
-  max_nframes_ = max_nframes;
-}
-
-LaserOdometer::LaserOdometer(const rclcpp::Node::SharedPtr& nh) :
-  nh_(nh),
-  init_(false),
-  prev_odom_(Eigen::Isometry3d::Identity()),
-  odom_(Eigen::Isometry3d::Identity()),
-  prev_stamp_(0.0),
-  sdata(SharedData::getInstance()),
-  stats(Stats::getInstance()),
-  params(Params::getInstance()),
-  lmap_manager(params->local_map_size_),
-  num_freqs_(0) {
-
-  for (int i = 0; i < 5; i++) {
-    in_freqs_[i] = 20.0; // 100/5
-    out_freqs_[i] = 20.0; // 100/5
+  LocalMapManager::~LocalMapManager() {
   }
-  mean_in_freq_ = 100.0; // high freq.
-  mean_out_freq_ = 100.0; // high freq.
-  last_in_time_secs_ = nh_->now().seconds();  
-  last_out_time_secs_ = last_in_time_secs_;
 
-  // Publishers
-  odom_pub_ = nh_->create_publisher<nav_msgs::msg::Odometry>("odom", 10);
-  twist_pub_ = nh_->create_publisher<geometry_msgs::msg::TwistStamped>("twist", 10);
+  void LocalMapManager::addPointCloud(const PointCloud::Ptr& pc) {
+    // Adding the current frame to the local map
+    *total_points_ += *pc;
+    nframes_++;
+    sizes_.push(pc->size());
 
-  // TF broadcaster
-  tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(nh_);
+    // Removing frames at the beginning if required
+    if (nframes_ > max_nframes_) {
+      // Get the size of the first frame
+      size_t pc_size = sizes_.front();
+      sizes_.pop();
 
-  // TF listener
-  tf_buffer_ = std::make_unique<tf2_ros::Buffer>(nh_->get_clock());
-  tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
-
-  //Load lanlet map and projector
-  projector_ = std::make_shared<lanelet::projection::UtmProjector>(lanelet::Origin({params->origin_coords_lanelet_[0], params->origin_coords_lanelet_[1]}));
-  lanelet_map_= lanelet::load(params->map_lanelet_path_, *projector_);
-
-    // Define rotation matrix (same as before)
-  double rotation_angle = params->angle_lanelet_correction_ * (M_PI / 180.0);
-  double cos_angle = std::cos(rotation_angle);
-  double sin_angle = std::sin(rotation_angle);
-
-  Eigen::Matrix2d R_M;
-  R_M << cos_angle, -sin_angle,
-          sin_angle, cos_angle;
-
-  // Gather all lanelet centerline points into a vector
-  for (const auto& lanelet : lanelet_map_->laneletLayer) {
-      auto centerline = lanelet.centerline();
-      for (const auto& point : centerline) {
-        Eigen::Vector2d correct_point(point.x(), point.y());
-        correct_point = R_M * correct_point;
-        lane_points.emplace_back(correct_point.x(), correct_point.y());
-      }
-  }
-}
-
-LaserOdometer::~LaserOdometer() {
-}
-
-void LaserOdometer::operator()(std::atomic<bool>& running) {
-  
-  while(running) {   
-
-    PointCloud::Ptr feats(new PointCloud);
-    std_msgs::msg::Header feat_header;
+      // Remove the points corresponding to the first frame
+      std::vector<int> ind(pc_size);
+      std::iota(std::begin(ind), std::end(ind), 0);
+      pcl::PointIndices::Ptr indices(new pcl::PointIndices);
+      indices->indices = ind;
+      pcl::ExtractIndices<Point> extract;
+      extract.setInputCloud(total_points_);
+      extract.setIndices(indices);
+      extract.setNegative(true);
+      extract.filter(*total_points_);
     
-    if (sdata->popFeatures(feats, feat_header)) {    
-      if (!init_) {        
-
-        // cache the static tf from base to laser
-        if (params->laser_frame_ == "") {
-          params->laser_frame_ = feat_header.frame_id;
-        }
-
-        if (!getBaseToLaserTf(params->laser_frame_))
-        {
-          RCLCPP_WARN(nh_->get_logger(), "Skipping point_cloud");
-          return;
-        }
-
-        auto start_t = Clock::now();
-
-        lmap_manager.addPointCloud(feats);
-        init_ = true;
-        prev_stamp_ = rclcpp::Time(feat_header.stamp).seconds();
-        
-        auto end_t = Clock::now();
-
-        // Register stats
-        if (params->save_results_) {
-          stats->addPose(odom_.matrix());
-          stats->addLaserOdometryTime(start_t, end_t);
-          stats->stopFrame(end_t);          
-        }
-
-        publishOdom(feat_header, odom_);
-
-      } else {
-
-        auto start_t = Clock::now();
-
-        // Computing local map
-        PointCloud::Ptr local_map_rec(new PointCloud);
-        PointCloud::Ptr local_map_gen(new PointCloud);
-        computeLocalMap(local_map_gen, local_map_rec);    
-
-        // Predict the current pose
-        Eigen::Isometry3d pred_odom = odom_ * (prev_odom_.inverse() * odom_);
-        prev_odom_ = odom_;
-        odom_ = pred_odom;
-
-        if (params->use_imu_){
-
-          // 1.- get roll and pitch from IMU (frame baselink)
-          Eigen::Quaterniond imu_ori = Eigen::Quaterniond::Identity();
-          sdata->getLastIMUOri(imu_ori);
-          tf2::Quaternion imu_quat(imu_ori.x(), imu_ori.y(), imu_ori.z(), imu_ori.w());
-          tf2::Matrix3x3 imu_m(imu_quat);
-          double imu_roll, imu_pitch, imu_yaw;
-          imu_m.getRPY(imu_roll, imu_pitch, imu_yaw);
-
-          //2.- rotate odom to frame baselink and get the orientation
-          Eigen::Isometry3d odom_bl = odom_ ;
-          Eigen::Quaterniond odom_ori_bl(odom_bl.rotation());
-          tf2::Quaternion odom_bl_quat(odom_ori_bl.x(), odom_ori_bl.y(), odom_ori_bl.z(), odom_ori_bl.w());
-          tf2::Matrix3x3 odom_bl_m(odom_bl_quat);
-          double odom_bl_roll, odom_bl_pitch, odom_bl_yaw;
-          odom_bl_m.getRPY(odom_bl_roll, odom_bl_pitch, odom_bl_yaw);
-
-          //ROS_INFO("roll %2.2f:%2.2f, pitch %2.2f:%2.2f, yaw %2.2f:%2.2f", imu_roll, odom_bl_roll, imu_pitch, odom_bl_pitch, imu_yaw, odom_bl_yaw);
-
-          //3.- overwrite roll and pitch
-          odom_bl_m.setRPY(imu_roll, imu_pitch, odom_bl_yaw);
-
-          //4.- fill the eigen structure with the new orientation
-          odom_bl_m.getRotation(odom_bl_quat);
-          odom_ori_bl = Eigen::Quaterniond(odom_bl_quat.w(), odom_bl_quat.x(), odom_bl_quat.y(), odom_bl_quat.z());
-          odom_bl.linear() = odom_ori_bl.toRotationMatrix();
-
-          //5.- rotate odom back to frame laser
-          odom_ = odom_bl;
-        }
-
-        // Updating the initial guess
-        Eigen::Quaterniond q_curr(odom_.rotation());
-        q_curr.normalize();
-
-        param_q[0] = q_curr.x();
-        param_q[1] = q_curr.y();
-        param_q[2] = q_curr.z();
-        param_q[3] = q_curr.w();
-
-        Eigen::Vector3d t_curr = odom_.translation();
-        param_t[0] = t_curr.x();
-        param_t[1] = t_curr.y();
-        param_t[2] = t_curr.z();
-
-        // Optimize the current pose
-        for (int optim_it = 0; optim_it < 2; optim_it++) {
-          
-          // Define the optimization problem
-          ceres::LossFunction* loss_function = new ceres::HuberLoss(0.2);
-          ceres::LocalParameterization* q_parameterization = new ceres::EigenQuaternionParameterization();
-          ceres::Problem::Options problem_options;
-          ceres::Problem problem(problem_options);
-          problem.AddParameterBlock(param_q, 4, q_parameterization);
-          problem.AddParameterBlock(param_t, 3);
-
-          // Adding constraints
-          addEdgeConstraints(feats, local_map_gen, local_map_rec, odom_, &problem, loss_function);
-
-          // Solving the optimization problem
-          ceres::Solver::Options options;
-          options.linear_solver_type = ceres::DENSE_QR;
-          options.max_num_iterations = 4;
-          options.minimizer_progress_to_stdout = false;
-          options.num_threads = sysconf( _SC_NPROCESSORS_ONLN );          
-          ceres::Solver::Summary summary;
-          ceres::Solve(options, &problem, &summary);
-          
-          // std::cout << summary.BriefReport() << "\n";
-
-          odom_ = Eigen::Isometry3d::Identity();
-          // odom_.linear() = q_curr.toRotationMatrix();
-          // odom_.translation() = t_curr;
-          Eigen::Quaterniond q_new(param_q[3], param_q[0], param_q[1], param_q[2]);
-          odom_.linear() = q_new.toRotationMatrix();
-          odom_.translation() = Eigen::Vector3d(param_t[0], param_t[1], param_t[2]);
-        }      
-
-      
- 
-        // Add current pose to history first
-        pose_history_.push_back(odom_);
-        
-        // Only run alignment when pose history reaches full size
-        if (pose_history_.size() == POSE_HISTORY_SIZE) {
-          // Store the old translation before any changes
-            alignTrajectoryToLane();
-            // for (int i = 0; pose_history_.size() > 10; i++)
-            pose_history_.pop_front();
-            
-        } 
-        RCLCPP_INFO(nh_->get_logger(), "Current odom translation: [%f, %f, %f]", 
-            odom_.translation().x(), odom_.translation().y(), odom_.translation().z());
-        Eigen::Matrix3d rot = odom_.linear();
-        RCLCPP_INFO(nh_->get_logger(), "Current odom rotation matrix row 1: [%f %f %f]", rot(0,0), rot(0,1), rot(0,2));
-        RCLCPP_INFO(nh_->get_logger(), "Current odom rotation matrix row 2: [%f %f %f]", rot(1,0), rot(1,1), rot(1,2));
-        RCLCPP_INFO(nh_->get_logger(), "Current odom rotation matrix row 3: [%f %f %f]", rot(2,0), rot(2,1), rot(2,2));
-       
-       // Compute the position of the detectd edges according to the final estimate position
-        PointCloud::Ptr edges_map(new PointCloud);
-        pcl::transformPointCloud(*feats, *edges_map, odom_.matrix());
-
-        // Save edges and update odometry window
-        lmap_manager.addPointCloud(edges_map);
-
-
-
-        auto end_t = Clock::now();
-
-        double now_secs = nh_->now().seconds();
-        mean_in_freq_ -= in_freqs_[num_freqs_];
-        in_freqs_[num_freqs_] = (1.0/(rclcpp::Time(feat_header.stamp).seconds() - last_in_time_secs_))/5.0;
-        mean_in_freq_ += in_freqs_[num_freqs_];
-        last_in_time_secs_ = rclcpp::Time(feat_header.stamp).seconds();
-
-        mean_out_freq_ -= out_freqs_[num_freqs_];
-        out_freqs_[num_freqs_] = (1.0/(now_secs - last_out_time_secs_))/5.0;
-        mean_out_freq_ += out_freqs_[num_freqs_];
-        last_out_time_secs_ = now_secs;
-
-        num_freqs_ ++;
-        num_freqs_ = num_freqs_ % 5;
-
-        RCLCPP_DEBUG(nh_->get_logger(), "Input frequency: %2.2f", mean_in_freq_);
-
-        if (mean_out_freq_ < mean_in_freq_ * 0.8) {
-          RCLCPP_WARN(nh_->get_logger(), "Output frequency too low: %2.2f (in: %2.2f)", mean_out_freq_, mean_in_freq_);
-        }
-
-        // Register stats
-        if (params->save_results_) {
-          stats->addPose(odom_.matrix());
-          stats->addLaserOdometryTime(start_t, end_t);
-          stats->stopFrame(end_t);
-        }
-
-        publishOdom(feat_header, odom_);
-        prev_stamp_ = rclcpp::Time(feat_header.stamp).seconds();
-      }
-    } 
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(2));
-  }
-}
-
-void LaserOdometer::computeLocalMap(PointCloud::Ptr& local_map_gen, PointCloud::Ptr& local_map_rec) {
-  
-  PointCloud::Ptr rec_local_map_(new PointCloud);
-  sdata->getLocalMap(rec_local_map_);
-  local_map_rec = rec_local_map_;
-  RCLCPP_DEBUG(nh_->get_logger(), "Local Map points - Received: %lu", rec_local_map_->size());
-
-  PointCloud::Ptr total_points;
-  size_t nframes = lmap_manager.getLocalMap(total_points);
-
-  PointCloud::Ptr gen_local_map_(new PointCloud);
-  if (params->filter_local_map_ && nframes == params->local_map_size_ && !params->mapping_) {
-    // Voxelize the points
-    pcl::VoxelGrid<Point> voxel_filter;
-    // voxel_filter.setLeafSize(0.15, 0.15, 0.15);
-    voxel_filter.setLeafSize(0.4, 0.4, 0.4);
-    voxel_filter.setInputCloud(total_points);
-    voxel_filter.filter(*gen_local_map_);
-  } else {
-    gen_local_map_ = total_points;
-  }
-  local_map_gen = gen_local_map_;
-  RCLCPP_DEBUG(nh_->get_logger(), "Local Map points - Generated: %lu", gen_local_map_->size());
-}
-
-void LaserOdometer::alignTrajectoryToLane() {
-
-    
-  // Find the closest lane point for each trajectory point  
-    std::vector<Eigen::Vector2d> best_lane_points(pose_history_.size());
-    std::vector<double> min_distances(pose_history_.size(), std::numeric_limits<double>::max());
-    std::vector<bool> lane_point_used(lane_points.size(), false);
-    std::vector<Eigen::Vector2d> trajectory_points(pose_history_.size());;
-
-    for (int i = static_cast<int>(pose_history_.size()) - 1; i >= 0; --i) {
-        Eigen::Vector2d traj_point(pose_history_[i].translation().x(), pose_history_[i].translation().y());
-
-        double best_dist = std::numeric_limits<double>::max();
-        int best_idx = -1;
-        for (size_t j = 0; j < lane_points.size(); ++j) {
-            if (lane_point_used[j]) continue;
-            double dist = (traj_point - lane_points[j]).norm();
-            if (dist < best_dist) {
-                best_dist = dist;
-                best_idx = static_cast<int>(j);
-            }
-        }
-            trajectory_points[i]= traj_point;
-            min_distances[i] = best_dist;
-            best_lane_points[i] = lane_points[best_idx];
-            lane_point_used[best_idx] = true; // Mark as used so only one trajectory point gets each neighbor
+      // Reducing the number of frames
+      nframes_--;
     }
+  }
 
-    // Apply 2D ICP (iterative) from trajectory_points to best_lane_points to find tx, ty, rot
+  size_t LocalMapManager::getLocalMap(PointCloud::Ptr& map) {
+    map = total_points_;
+    return nframes_;
+  }
+
+  void LocalMapManager::setMaxFrames(const size_t max_nframes) {
+    max_nframes_ = max_nframes;
+  }
+
+  LaserOdometer::LaserOdometer(const rclcpp::Node::SharedPtr& nh) :
+    nh_(nh),
+    init_(false),
+    prev_odom_(Eigen::Isometry3d::Identity()),
+    odom_(Eigen::Isometry3d::Identity()),
+    prev_stamp_(0.0),
+    sdata(SharedData::getInstance()),
+    stats(Stats::getInstance()),
+    params(Params::getInstance()),
+    lmap_manager(params->local_map_size_),
+    num_freqs_(0) {
+
+    for (int i = 0; i < 5; i++) {
+      in_freqs_[i] = 20.0; // 100/5
+      out_freqs_[i] = 20.0; // 100/5
+    }
+    mean_in_freq_ = 100.0; // high freq.
+    mean_out_freq_ = 100.0; // high freq.
+    last_in_time_secs_ = nh_->now().seconds();  
+    last_out_time_secs_ = last_in_time_secs_;
+
+    // Publishers
+    odom_pub_ = nh_->create_publisher<nav_msgs::msg::Odometry>("odom", 10);
+    twist_pub_ = nh_->create_publisher<geometry_msgs::msg::TwistStamped>("twist", 10);
+
+    // TF broadcaster
+    tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(nh_);
+
+    // TF listener
+    tf_buffer_ = std::make_unique<tf2_ros::Buffer>(nh_->get_clock());
+    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+
+    //Load lanlet map and projector
+    projector_ = std::make_shared<lanelet::projection::UtmProjector>(lanelet::Origin({params->origin_coords_lanelet_[0], params->origin_coords_lanelet_[1]}));
+    lanelet_map_= lanelet::load(params->map_lanelet_path_, *projector_);
+
+      // Define rotation matrix (same as before)
+    double rotation_angle = params->angle_lanelet_correction_ * (M_PI / 180.0);
+    double cos_angle = std::cos(rotation_angle);
+    double sin_angle = std::sin(rotation_angle);
+
+    Eigen::Matrix2d R_M;
+    R_M << cos_angle, -sin_angle,
+            sin_angle, cos_angle;
+
+    // Gather all lanelet centerline points into a vector
+    for (const auto& lanelet : lanelet_map_->laneletLayer) {
+        auto centerline = lanelet.centerline();
+        for (const auto& point : centerline) {
+          Eigen::Vector2d correct_point(point.x(), point.y());
+          correct_point = R_M * correct_point;
+          lane_points.emplace_back(correct_point.x(), correct_point.y());
+        }
+    }
+  }
+
+  LaserOdometer::~LaserOdometer() {
+  }
+
+  void LaserOdometer::operator()(std::atomic<bool>& running) {
     
-    std::vector<Eigen::Vector2d> src_points = trajectory_points;
-    std::vector<Eigen::Vector2d> tgt_points = best_lane_points;
+    while(running) {   
+
+      PointCloud::Ptr feats(new PointCloud);
+      std_msgs::msg::Header feat_header;
+      
+      if (sdata->popFeatures(feats, feat_header)) {    
+        if (!init_) {        
+
+          // cache the static tf from base to laser
+          if (params->laser_frame_ == "") {
+            params->laser_frame_ = feat_header.frame_id;
+          }
+
+          if (!getBaseToLaserTf(params->laser_frame_))
+          {
+            RCLCPP_WARN(nh_->get_logger(), "Skipping point_cloud");
+            return;
+          }
+
+          auto start_t = Clock::now();
+
+          lmap_manager.addPointCloud(feats);
+          init_ = true;
+          prev_stamp_ = rclcpp::Time(feat_header.stamp).seconds();
+          
+          auto end_t = Clock::now();
+
+          // Register stats
+          if (params->save_results_) {
+            stats->addPose(odom_.matrix());
+            stats->addLaserOdometryTime(start_t, end_t);
+            stats->stopFrame(end_t);          
+          }
+
+          publishOdom(feat_header, odom_);
+
+        } else {
+
+          auto start_t = Clock::now();
+
+          // Computing local map
+          PointCloud::Ptr local_map_rec(new PointCloud);
+          PointCloud::Ptr local_map_gen(new PointCloud);
+          computeLocalMap(local_map_gen, local_map_rec);    
+
+          // Predict the current pose
+          Eigen::Isometry3d pred_odom = odom_ * (prev_odom_.inverse() * odom_);
+          prev_odom_ = odom_;
+          odom_ = pred_odom;
+
+          if (params->use_imu_){
+
+            // 1.- get roll and pitch from IMU (frame baselink)
+            Eigen::Quaterniond imu_ori = Eigen::Quaterniond::Identity();
+            sdata->getLastIMUOri(imu_ori);
+            tf2::Quaternion imu_quat(imu_ori.x(), imu_ori.y(), imu_ori.z(), imu_ori.w());
+            tf2::Matrix3x3 imu_m(imu_quat);
+            double imu_roll, imu_pitch, imu_yaw;
+            imu_m.getRPY(imu_roll, imu_pitch, imu_yaw);
+
+            //2.- rotate odom to frame baselink and get the orientation
+            Eigen::Isometry3d odom_bl = odom_ ;
+            Eigen::Quaterniond odom_ori_bl(odom_bl.rotation());
+            tf2::Quaternion odom_bl_quat(odom_ori_bl.x(), odom_ori_bl.y(), odom_ori_bl.z(), odom_ori_bl.w());
+            tf2::Matrix3x3 odom_bl_m(odom_bl_quat);
+            double odom_bl_roll, odom_bl_pitch, odom_bl_yaw;
+            odom_bl_m.getRPY(odom_bl_roll, odom_bl_pitch, odom_bl_yaw);
+
+            //ROS_INFO("roll %2.2f:%2.2f, pitch %2.2f:%2.2f, yaw %2.2f:%2.2f", imu_roll, odom_bl_roll, imu_pitch, odom_bl_pitch, imu_yaw, odom_bl_yaw);
+
+            //3.- overwrite roll and pitch
+            odom_bl_m.setRPY(imu_roll, imu_pitch, odom_bl_yaw);
+
+            //4.- fill the eigen structure with the new orientation
+            odom_bl_m.getRotation(odom_bl_quat);
+            odom_ori_bl = Eigen::Quaterniond(odom_bl_quat.w(), odom_bl_quat.x(), odom_bl_quat.y(), odom_bl_quat.z());
+            odom_bl.linear() = odom_ori_bl.toRotationMatrix();
+
+            //5.- rotate odom back to frame laser
+            odom_ = odom_bl;
+          }
+
+          // Updating the initial guess
+          Eigen::Quaterniond q_curr(odom_.rotation());
+          q_curr.normalize();
+
+          param_q[0] = q_curr.x();
+          param_q[1] = q_curr.y();
+          param_q[2] = q_curr.z();
+          param_q[3] = q_curr.w();
+
+          Eigen::Vector3d t_curr = odom_.translation();
+          param_t[0] = t_curr.x();
+          param_t[1] = t_curr.y();
+          param_t[2] = t_curr.z();
+
+          // Optimize the current pose
+          for (int optim_it = 0; optim_it < 2; optim_it++) {
+            
+            // Define the optimization problem
+            ceres::LossFunction* loss_function = new ceres::HuberLoss(0.2);
+            ceres::LocalParameterization* q_parameterization = new ceres::EigenQuaternionParameterization();
+            ceres::Problem::Options problem_options;
+            ceres::Problem problem(problem_options);
+            problem.AddParameterBlock(param_q, 4, q_parameterization);
+            problem.AddParameterBlock(param_t, 3);
+
+            // Adding constraints
+            addEdgeConstraints(feats, local_map_gen, local_map_rec, odom_, &problem, loss_function);
+
+            // Solving the optimization problem
+            ceres::Solver::Options options;
+            options.linear_solver_type = ceres::DENSE_QR;
+            options.max_num_iterations = 4;
+            options.minimizer_progress_to_stdout = false;
+            options.num_threads = sysconf( _SC_NPROCESSORS_ONLN );          
+            ceres::Solver::Summary summary;
+            ceres::Solve(options, &problem, &summary);
+            
+            // std::cout << summary.BriefReport() << "\n";
+
+            odom_ = Eigen::Isometry3d::Identity();
+            // odom_.linear() = q_curr.toRotationMatrix();
+            // odom_.translation() = t_curr;
+            Eigen::Quaterniond q_new(param_q[3], param_q[0], param_q[1], param_q[2]);
+            odom_.linear() = q_new.toRotationMatrix();
+            odom_.translation() = Eigen::Vector3d(param_t[0], param_t[1], param_t[2]);
+          }      
+
+        
+  
+          // Add current pose to history first
+          pose_history_.push_back(odom_);
+          
+          // Only run alignment when pose history reaches full size
+          if (pose_history_.size() == POSE_HISTORY_SIZE) {
+            // Store the old translation before any changes
+              alignTrajectoryToLane();
+              // for (int i = 0; pose_history_.size() > 10; i++)
+              if  (pose_history_.size() > 0)
+                pose_history_.pop_front();
+              
+          } 
+          RCLCPP_INFO(nh_->get_logger(), "Current odom translation: [%f, %f, %f]", 
+              odom_.translation().x(), odom_.translation().y(), odom_.translation().z());
+          Eigen::Matrix3d rot = odom_.linear();
+          RCLCPP_INFO(nh_->get_logger(), "Current odom rotation matrix row 1: [%f %f %f]", rot(0,0), rot(0,1), rot(0,2));
+          RCLCPP_INFO(nh_->get_logger(), "Current odom rotation matrix row 2: [%f %f %f]", rot(1,0), rot(1,1), rot(1,2));
+          RCLCPP_INFO(nh_->get_logger(), "Current odom rotation matrix row 3: [%f %f %f]", rot(2,0), rot(2,1), rot(2,2));
+        
+        // Compute the position of the detectd edges according to the final estimate position
+          PointCloud::Ptr edges_map(new PointCloud);
+          pcl::transformPointCloud(*feats, *edges_map, odom_.matrix());
+
+          // Save edges and update odometry window
+          lmap_manager.addPointCloud(edges_map);
+
+
+
+          auto end_t = Clock::now();
+
+          double now_secs = nh_->now().seconds();
+          mean_in_freq_ -= in_freqs_[num_freqs_];
+          in_freqs_[num_freqs_] = (1.0/(rclcpp::Time(feat_header.stamp).seconds() - last_in_time_secs_))/5.0;
+          mean_in_freq_ += in_freqs_[num_freqs_];
+          last_in_time_secs_ = rclcpp::Time(feat_header.stamp).seconds();
+
+          mean_out_freq_ -= out_freqs_[num_freqs_];
+          out_freqs_[num_freqs_] = (1.0/(now_secs - last_out_time_secs_))/5.0;
+          mean_out_freq_ += out_freqs_[num_freqs_];
+          last_out_time_secs_ = now_secs;
+
+          num_freqs_ ++;
+          num_freqs_ = num_freqs_ % 5;
+
+          RCLCPP_DEBUG(nh_->get_logger(), "Input frequency: %2.2f", mean_in_freq_);
+
+          if (mean_out_freq_ < mean_in_freq_ * 0.8) {
+            RCLCPP_WARN(nh_->get_logger(), "Output frequency too low: %2.2f (in: %2.2f)", mean_out_freq_, mean_in_freq_);
+          }
+
+          // Register stats
+          if (params->save_results_) {
+            stats->addPose(odom_.matrix());
+            stats->addLaserOdometryTime(start_t, end_t);
+            stats->stopFrame(end_t);
+          }
+
+          publishOdom(feat_header, odom_);
+          prev_stamp_ = rclcpp::Time(feat_header.stamp).seconds();
+        }
+      } 
+
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+  }
+
+  void LaserOdometer::computeLocalMap(PointCloud::Ptr& local_map_gen, PointCloud::Ptr& local_map_rec) {
+    
+    PointCloud::Ptr rec_local_map_(new PointCloud);
+    sdata->getLocalMap(rec_local_map_);
+    local_map_rec = rec_local_map_;
+    RCLCPP_DEBUG(nh_->get_logger(), "Local Map points - Received: %lu", rec_local_map_->size());
+
+    PointCloud::Ptr total_points;
+    size_t nframes = lmap_manager.getLocalMap(total_points);
+
+    PointCloud::Ptr gen_local_map_(new PointCloud);
+    if (params->filter_local_map_ && nframes == params->local_map_size_ && !params->mapping_) {
+      // Voxelize the points
+      pcl::VoxelGrid<Point> voxel_filter;
+      // voxel_filter.setLeafSize(0.15, 0.15, 0.15);
+      voxel_filter.setLeafSize(0.4, 0.4, 0.4);
+      voxel_filter.setInputCloud(total_points);
+      voxel_filter.filter(*gen_local_map_);
+    } else {
+      gen_local_map_ = total_points;
+    }
+    local_map_gen = gen_local_map_;
+    RCLCPP_DEBUG(nh_->get_logger(), "Local Map points - Generated: %lu", gen_local_map_->size());
+  }
+
+  void LaserOdometer::alignTrajectoryToLane() {
+
+      // Find the closest lane point for each trajectory point using the new method
+      std::vector<Eigen::Vector2d> best_lane_points = findClosestLanePoints(pose_history_);
+      
+      // Create trajectory points vector
+      std::vector<Eigen::Vector2d> trajectory_points(pose_history_.size());
+      for (size_t i = 0; i < pose_history_.size(); ++i) {
+          trajectory_points[i] = Eigen::Vector2d(pose_history_[i].translation().x(), pose_history_[i].translation().y());
+      }
+
+      // Apply 2D ICP using the new solver method
+      auto [R_total, t_total, mean_error] = solveIcp2d(trajectory_points, best_lane_points);
+
+
+      // Calculate average distance from original traj to closest point in lane_points (original error)
+      double orig_error = 0.0;
+      for (int i = 0; i < trajectory_points.size(); i++) {
+        Eigen::Vector2d traj_point = trajectory_points[i];
+        Eigen::Vector2d lane_point = best_lane_points[i];
+        double d = (traj_point - lane_point).norm();
+        orig_error += d;
+      }
+      orig_error /= trajectory_points.size();
+
+      // Calculate average distance from transformed traj to closest point in lane_points (ICP error)
+      double icp_error = 0.0;
+      for (int i = 0; i < trajectory_points.size(); i++) {
+        Eigen::Vector2d transformed_point = R_total * trajectory_points[i] + t_total;
+        Eigen::Vector2d lane_point = best_lane_points[i];
+        double d = (transformed_point - lane_point).norm();
+        icp_error += d;
+      }
+      icp_error /= trajectory_points.size();
+
+      RCLCPP_INFO(nh_->get_logger(),"ICP error %f,  orig error %f", icp_error, orig_error );
+      // RCLCPP_INFO(nh_->get_logger(), "Transform matrix:\n[%f %f; %f %f], translation: [%f, %f]", 
+      //     R_total(0,0), R_total(0,1), R_total(1,0), R_total(1,1), t_total.x(), t_total.y());
+
+      if (icp_error < 10.0) {
+          // Apply ICP transformation to current odometry
+          Eigen::Vector2d current_translation(odom_.translation().x(), odom_.translation().y());
+          Eigen::Vector2d new_translation = R_total * current_translation + t_total;
+          
+          // Update odometry translation
+          odom_.translation().x() = new_translation.x();
+          odom_.translation().y() = new_translation.y();
+          
+          // Update prev_odom_ translation as well
+          Eigen::Vector2d prev_translation(prev_odom_.translation().x(), prev_odom_.translation().y());
+          Eigen::Vector2d new_prev_translation = R_total * prev_translation + t_total;
+          prev_odom_.translation().x() = new_prev_translation.x();
+          prev_odom_.translation().y() = new_prev_translation.y();
+          
+          
+          // Update local map with the same transformation
+          // Update all poses in pose_history_ with the new R_total and t_total and save back
+          pose_history_.clear();
+          RCLCPP_INFO(nh_->get_logger(), "Applied ICP transformation to odometry and local map");
+    }
+  }
+
+  std::tuple<Eigen::Matrix2d, Eigen::Vector2d, double> LaserOdometer::solveIcp2d(
+      const std::vector<Eigen::Vector2d>& source_points,
+      const std::vector<Eigen::Vector2d>& target_points,
+      int max_iterations,
+      double tolerance) {
+    
+    std::vector<Eigen::Vector2d> src_points = source_points;
+    std::vector<Eigen::Vector2d> tgt_points = target_points;
 
     // ICP parameters
-    const int max_iterations = 50;
-    const double tolerance = 1e-6;
     double prev_error = std::numeric_limits<double>::max();
     size_t N = src_points.size();
 
     // Initialize transformation
-    double theta = 0.0;
     Eigen::Matrix2d R_total = Eigen::Matrix2d::Identity();
     Eigen::Vector2d t_total = Eigen::Vector2d::Zero();
     double mean_error = 0.0;
 
-    
     for (int iter = 0; iter < max_iterations; ++iter) {
         // Find closest target point for each source point (here, 1-to-1, so just use tgt_points)
         // Compute centroids
@@ -420,15 +455,8 @@ void LaserOdometer::alignTrajectoryToLane() {
         // Compute cross-covariance
         Eigen::Matrix2d W = Eigen::Matrix2d::Zero();
         for (size_t i = 0; i < N; ++i) {
-            W += src_centered[i]* tgt_centered[i].transpose();
+            W += src_centered[i] * tgt_centered[i].transpose();
         }
-
-        // // SVD for optimal rotation
-        // Eigen::JacobiSVD<Eigen::Matrix2d> svd(W, Eigen::ComputeFullU | Eigen::ComputeFullV);
-        // Eigen::Matrix2d U = svd.matrixU();
-        // Eigen::Matrix2d V = svd.matrixV();
-        // double d = (V * U.transpose()).determinant();
-        // Eigen::Matrix2d R = V * Eigen::DiagonalMatrix<double, 2>(1, d) * U.transpose();
 
         // SVD for optimal rotation
         Eigen::JacobiSVD<Eigen::Matrix2d> svd(W, Eigen::ComputeFullU | Eigen::ComputeFullV);
@@ -441,6 +469,7 @@ void LaserOdometer::alignTrajectoryToLane() {
             V.col(1) *= -1;
             R = V * U.transpose();
         }
+        
         // Compute translation
         Eigen::Vector2d t = centroid_tgt - R * centroid_src;
 
@@ -466,233 +495,210 @@ void LaserOdometer::alignTrajectoryToLane() {
         prev_error = mean_error;
     }
 
-    // Use R_total (2x2 rotation matrix) and t_total (2x1 translation vector) directly
+    return std::make_tuple(R_total, t_total, mean_error);
+  }
 
-    // Calculate the distance between current and new position for the last pose
+  std::vector<Eigen::Vector2d> LaserOdometer::findClosestLanePoints(const std::deque<Eigen::Isometry3d>& pose_history) {
+      std::vector<Eigen::Vector2d> best_lane_points(pose_history.size());
+      std::vector<bool> lane_point_used(lane_points.size(), false);
+      
+      // Process points in reverse order to prioritize latest points
+      for (int i = static_cast<int>(pose_history.size()) - 1; i >= 0; --i) {
+          Eigen::Vector2d traj_point(pose_history[i].translation().x(), pose_history[i].translation().y());
+          
+          double best_dist = std::numeric_limits<double>::max();
+          int best_idx = -1;
+          
+          // Find closest unused lane point
+          for (size_t j = 0; j < lane_points.size(); ++j) {
+              if (lane_point_used[j]) continue;
+              double dist = (traj_point - lane_points[j]).norm();
+              if (dist < best_dist) {
+                  best_dist = dist;
+                  best_idx = static_cast<int>(j);
+              }
+          }
+          
+          // Assign the closest lane point
+          if (best_idx >= 0) {
+              best_lane_points[i] = lane_points[best_idx];
+              lane_point_used[best_idx] = true; // Mark as used
+          } else {
+              // If no unused lane point found, use the closest one (even if used)
+              best_dist = std::numeric_limits<double>::max();
+              for (size_t j = 0; j < lane_points.size(); ++j) {
+                  double dist = (traj_point - lane_points[j]).norm();
+                  if (dist < best_dist) {
+                      best_dist = dist;
+                      best_idx = static_cast<int>(j);
+                  }
+              }
+              best_lane_points[i] = lane_points[best_idx];
+          }
+      }
+      
+      return best_lane_points;
+  }
 
-    // Calculate average distance from original traj to transformed traj
-    double total_traj_to_transf = 0.0;
-    double total_orig_to_lane = 0.0;
-    std::vector<Eigen::Vector2d> transformed_traj;
-    for (size_t i = 0; i < pose_history_.size(); ++i) {
-        const auto& pose = pose_history_[i];
-        Eigen::Vector2d orig_xy(pose.translation().x(), pose.translation().y());
-        // Apply rotation and translation: x' = R*x + t
-        Eigen::Vector2d new_xy = R_total * orig_xy + t_total;
-        transformed_traj.push_back(new_xy);
-        double dist = (new_xy - orig_xy).norm();
-        total_traj_to_transf += dist;
+  void LaserOdometer::addEdgeConstraints(const PointCloud::Ptr& edges,
+                          const PointCloud::Ptr& local_map_gen,
+                          const PointCloud::Ptr& local_map_rec,
+                          const Eigen::Isometry3d& pose,
+                          ceres::Problem* problem,
+                          ceres::LossFunction* loss) {
+    // Translate edges
+    PointCloud::Ptr edges_map(new PointCloud);
+    pcl::transformPointCloud(*edges, *edges_map, pose.matrix());
+    
+    PointCloud::Ptr local_map(new PointCloud);
+    *local_map += *local_map_gen;
+    if (params->mapping_) {
+      *local_map += *local_map_rec;
+    }
 
-        // Calculate original error: distance from original traj to lane point
-        if (i < best_lane_points.size()) {
-            double orig_to_lane = (orig_xy - best_lane_points[i]).norm();
-            total_orig_to_lane += orig_to_lane;
+    // Trying to match against the received local map
+    int correct_matches = 0;
+    pcl::KdTreeFLANN<Point>::Ptr tree(new pcl::KdTreeFLANN<Point>);
+    tree->setInputCloud(local_map);
+    for (size_t i = 0; i < edges_map->points.size(); i++) {
+      std::vector<int> indices;
+      std::vector<float> sq_dist;
+      tree->nearestKSearch(edges_map->points[i], 5, indices, sq_dist);
+      if (sq_dist[4] < 1.0) {
+        std::vector<Eigen::Vector3d> nearCorners;
+        Eigen::Vector3d center(0, 0, 0);
+        for (int j = 0; j < 5; j++) {
+          Eigen::Vector3d tmp(local_map->points[indices[j]].x,
+                              local_map->points[indices[j]].y,
+                              local_map->points[indices[j]].z);
+          center = center + tmp;
+          nearCorners.push_back(tmp);
         }
-    }
-    double avg_traj_to_transf = (transformed_traj.size() > 0) ? (total_traj_to_transf / transformed_traj.size()) : 0.0;
-    double avg_orig_to_lane = (transformed_traj.size() > 0) ? (total_orig_to_lane / transformed_traj.size()) : 0.0;
+        center = center / 5.0;
 
-    // Calculate average distance from transformed traj to closest point in lane_points
-    double icp_error = 0.0;
-    for (int i = 0; i < transformed_traj.size(); i++) {
-      Eigen::Vector2d traj_point = transformed_traj[i];
-      Eigen::Vector2d lane_point = best_lane_points[i];
-      double d = (traj_point - lane_point).norm();
-      icp_error += d;
-    }
-    icp_error /= transformed_traj.size();
-    // Print the last value of traj to transformed traj
-    Eigen::Vector2d traj_point = transformed_traj[pose_history_.size() - 1];
-    Eigen::Vector2d last_lane_point = best_lane_points[pose_history_.size() - 1];
-    double last_traj_to_transf = (traj_point - last_lane_point).norm();
+        Eigen::Matrix3d covMat = Eigen::Matrix3d::Zero();
+        for (int j = 0; j < 5; j++) {
+          Eigen::Matrix<double, 3, 1> tmpZeroMean = nearCorners[j] - center;
+          covMat = covMat + tmpZeroMean * tmpZeroMean.transpose();
+        }
 
-    RCLCPP_INFO(nh_->get_logger(), 
-        "ICP error %f, mean error %f,  orig error %f, avg traj->transf %f, last traj->transf %f", 
-        icp_error, mean_error, avg_orig_to_lane, avg_traj_to_transf, last_traj_to_transf);
-    RCLCPP_INFO(nh_->get_logger(), "Transform matrix:\n[%f %f; %f %f], translation: [%f, %f]", 
-        R_total(0,0), R_total(0,1), R_total(1,0), R_total(1,1), t_total.x(), t_total.y());
-
-    if (icp_error < 10.0) {
-        // Apply ICP transformation to current odometry
-        Eigen::Vector2d current_translation(odom_.translation().x(), odom_.translation().y());
-        Eigen::Vector2d new_translation = R_total * current_translation + t_total;
+        Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> saes(covMat);
         
-        // Update odometry translation
-        odom_.translation().x() = new_translation.x();
-        odom_.translation().y() = new_translation.y();
+        if (saes.eigenvalues()[2] > 3 * saes.eigenvalues()[1]) {
+          // Set a correct match
+          correct_matches++;
+          Eigen::Vector3d curr_point(edges->points[i].x,
+                                    edges->points[i].y,
+                                    edges->points[i].z);
+
+          Eigen::Vector3d pt_a(local_map->points[indices[0]].x,
+                              local_map->points[indices[0]].y,
+                              local_map->points[indices[0]].z);
         
-        // Update prev_odom_ translation as well
-        Eigen::Vector2d prev_translation(prev_odom_.translation().x(), prev_odom_.translation().y());
-        Eigen::Vector2d new_prev_translation = R_total * prev_translation + t_total;
-        prev_odom_.translation().x() = new_prev_translation.x();
-        prev_odom_.translation().y() = new_prev_translation.y();
-        
-        
-        // Update local map with the same transformation
-        pose_history_.clear();
-        RCLCPP_INFO(nh_->get_logger(), "Applied ICP transformation to odometry and local map");
-    }
-}
+          Eigen::Vector3d pt_b(local_map->points[indices[1]].x,
+                              local_map->points[indices[1]].y,
+                              local_map->points[indices[1]].z);
 
-void LaserOdometer::addEdgeConstraints(const PointCloud::Ptr& edges,
-                        const PointCloud::Ptr& local_map_gen,
-                        const PointCloud::Ptr& local_map_rec,
-                        const Eigen::Isometry3d& pose,
-                        ceres::Problem* problem,
-                        ceres::LossFunction* loss) {
-  // Translate edges
-  PointCloud::Ptr edges_map(new PointCloud);
-  pcl::transformPointCloud(*edges, *edges_map, pose.matrix());
-  
-  PointCloud::Ptr local_map(new PointCloud);
-  *local_map += *local_map_gen;
-  if (params->mapping_) {
-    *local_map += *local_map_rec;
-  }
-
-  // Trying to match against the received local map
-  int correct_matches = 0;
-  pcl::KdTreeFLANN<Point>::Ptr tree(new pcl::KdTreeFLANN<Point>);
-  tree->setInputCloud(local_map);
-  for (size_t i = 0; i < edges_map->points.size(); i++) {
-    std::vector<int> indices;
-    std::vector<float> sq_dist;
-    tree->nearestKSearch(edges_map->points[i], 5, indices, sq_dist);
-    if (sq_dist[4] < 1.0) {
-      std::vector<Eigen::Vector3d> nearCorners;
-      Eigen::Vector3d center(0, 0, 0);
-      for (int j = 0; j < 5; j++) {
-        Eigen::Vector3d tmp(local_map->points[indices[j]].x,
-                            local_map->points[indices[j]].y,
-                            local_map->points[indices[j]].z);
-        center = center + tmp;
-        nearCorners.push_back(tmp);
-      }
-      center = center / 5.0;
-
-      Eigen::Matrix3d covMat = Eigen::Matrix3d::Zero();
-      for (int j = 0; j < 5; j++) {
-        Eigen::Matrix<double, 3, 1> tmpZeroMean = nearCorners[j] - center;
-        covMat = covMat + tmpZeroMean * tmpZeroMean.transpose();
-      }
-
-      Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> saes(covMat);
-      
-      if (saes.eigenvalues()[2] > 3 * saes.eigenvalues()[1]) {
-        // Set a correct match
-        correct_matches++;
-        Eigen::Vector3d curr_point(edges->points[i].x,
-                                   edges->points[i].y,
-                                   edges->points[i].z);
-
-        Eigen::Vector3d pt_a(local_map->points[indices[0]].x,
-                             local_map->points[indices[0]].y,
-                             local_map->points[indices[0]].z);
-      
-        Eigen::Vector3d pt_b(local_map->points[indices[1]].x,
-                             local_map->points[indices[1]].y,
-                             local_map->points[indices[1]].z);
-
-        ceres::CostFunction* cost_function = Point2LineFactor::create(curr_point, pt_a, pt_b, params->min_range_, params->max_range_);
-        problem->AddResidualBlock(cost_function, loss, param_q, param_t);
+          ceres::CostFunction* cost_function = Point2LineFactor::create(curr_point, pt_a, pt_b, params->min_range_, params->max_range_);
+          problem->AddResidualBlock(cost_function, loss, param_q, param_t);
+        }
       }
     }
+
+    RCLCPP_DEBUG(nh_->get_logger(), "Correct matchings: %i", correct_matches);
   }
 
-  RCLCPP_DEBUG(nh_->get_logger(), "Correct matchings: %i", correct_matches);
-}
+  bool LaserOdometer::getBaseToLaserTf (const std::string& frame_id) {
 
-bool LaserOdometer::getBaseToLaserTf (const std::string& frame_id) {
+    geometry_msgs::msg::TransformStamped laser_to_base_tf;
+    try {
+      rclcpp::Time now = nh_->get_clock()->now();
+      laser_to_base_tf = tf_buffer_->lookupTransform(
+        params->base_frame_, // target frame
+        frame_id,  // source frame
+        now,
+        rclcpp::Duration(2.0, 0));
+    } catch (const tf2::TransformException & ex) {
+      RCLCPP_WARN(nh_->get_logger(), "Could not get initial transform from %s to %s: %s", frame_id.c_str(), params->base_frame_.c_str(), ex.what());
+      return false;
+    }
 
-  geometry_msgs::msg::TransformStamped laser_to_base_tf;
-  try {
-    rclcpp::Time now = nh_->get_clock()->now();
-    laser_to_base_tf = tf_buffer_->lookupTransform(
-      params->base_frame_, // target frame
-      frame_id,  // source frame
-      now,
-      rclcpp::Duration(2.0, 0));
-  } catch (const tf2::TransformException & ex) {
-    RCLCPP_WARN(nh_->get_logger(), "Could not get initial transform from %s to %s: %s", frame_id.c_str(), params->base_frame_.c_str(), ex.what());
-    return false;
+    laser_to_base_.translation() = Eigen::Vector3d(laser_to_base_tf.transform.translation.x,
+                                                  laser_to_base_tf.transform.translation.y,
+                                                  laser_to_base_tf.transform.translation.z);
+    Eigen::Quaterniond q_aux(laser_to_base_tf.transform.rotation.w,
+                            laser_to_base_tf.transform.rotation.x,
+                            laser_to_base_tf.transform.rotation.y,
+                            laser_to_base_tf.transform.rotation.z);
+    laser_to_base_.linear() = q_aux.toRotationMatrix();
+
+    return true;
   }
 
-  laser_to_base_.translation() = Eigen::Vector3d(laser_to_base_tf.transform.translation.x,
-                                                 laser_to_base_tf.transform.translation.y,
-                                                 laser_to_base_tf.transform.translation.z);
-  Eigen::Quaterniond q_aux(laser_to_base_tf.transform.rotation.w,
-                           laser_to_base_tf.transform.rotation.x,
-                           laser_to_base_tf.transform.rotation.y,
-                           laser_to_base_tf.transform.rotation.z);
-  laser_to_base_.linear() = q_aux.toRotationMatrix();
+  void LaserOdometer::publishOdom(const std_msgs::msg::Header& header, const Eigen::Isometry3d& pose) {
+    // Publishing odometry
+    nav_msgs::msg::Odometry laser_odom_msg;
+    laser_odom_msg.header.frame_id = params->fixed_frame_;
+    laser_odom_msg.child_frame_id = params->base_frame_;
+    laser_odom_msg.header.stamp = header.stamp;
+    // Transform to base_link frame before publication
+    Eigen::Isometry3d odom_base_link = laser_to_base_* pose ;
+    Eigen::Quaterniond q_current(odom_base_link.rotation());
+    q_current.normalize();
 
-  return true;
-}
+    Eigen::Vector3d t_current = odom_base_link.translation();
+    //Filling pose
+    laser_odom_msg.pose.pose.orientation.x = q_current.x();
+    laser_odom_msg.pose.pose.orientation.y = q_current.y();
+    laser_odom_msg.pose.pose.orientation.z = q_current.z();
+    laser_odom_msg.pose.pose.orientation.w = q_current.w();
+    laser_odom_msg.pose.pose.position.x = t_current.x();
+    laser_odom_msg.pose.pose.position.y = t_current.y();
+    laser_odom_msg.pose.pose.position.z = t_current.z();
+    //Filling twist
+    double delta_time = rclcpp::Time(header.stamp).seconds() - prev_stamp_;
+    Eigen::Isometry3d delta_odom = ((laser_to_base_*prev_odom_ ).inverse() * odom_base_link);
+    Eigen::Vector3d t_delta = delta_odom.translation();
+    laser_odom_msg.twist.twist.linear.x = t_delta.x() / delta_time;
+    laser_odom_msg.twist.twist.linear.y = t_delta.y() / delta_time;
+    laser_odom_msg.twist.twist.linear.z = t_delta.z() / delta_time;
+    Eigen::Quaterniond q_delta(delta_odom.rotation());
+    // we use tf because euler angles in Eigen present singularity problems
+    tf2::Quaternion quat(q_delta.x(), q_delta.y(), q_delta.z(), q_delta.w());
+    tf2::Matrix3x3 m(quat);
+    double roll, pitch, yaw;
+    m.getRPY(roll, pitch, yaw);
+    laser_odom_msg.twist.twist.angular.x = roll / delta_time;
+    laser_odom_msg.twist.twist.angular.y = pitch / delta_time;
+    laser_odom_msg.twist.twist.angular.z = yaw / delta_time;
+    odom_pub_->publish(laser_odom_msg);
 
-void LaserOdometer::publishOdom(const std_msgs::msg::Header& header, const Eigen::Isometry3d& pose) {
-  // Publishing odometry
-  nav_msgs::msg::Odometry laser_odom_msg;
-  laser_odom_msg.header.frame_id = params->fixed_frame_;
-  laser_odom_msg.child_frame_id = params->base_frame_;
-  laser_odom_msg.header.stamp = header.stamp;
-  // Transform to base_link frame before publication
-  Eigen::Isometry3d odom_base_link = laser_to_base_* pose ;
-  Eigen::Quaterniond q_current(odom_base_link.rotation());
-  q_current.normalize();
+    // Publishing twist
+    geometry_msgs::msg::TwistStamped twist_msg;
+    twist_msg.header.frame_id = params->base_frame_;
+    twist_msg.header.stamp = header.stamp;
+    twist_msg.twist = laser_odom_msg.twist.twist;
+    twist_pub_->publish(twist_msg);
 
-  Eigen::Vector3d t_current = odom_base_link.translation();
-  //Filling pose
-  laser_odom_msg.pose.pose.orientation.x = q_current.x();
-  laser_odom_msg.pose.pose.orientation.y = q_current.y();
-  laser_odom_msg.pose.pose.orientation.z = q_current.z();
-  laser_odom_msg.pose.pose.orientation.w = q_current.w();
-  laser_odom_msg.pose.pose.position.x = t_current.x();
-  laser_odom_msg.pose.pose.position.y = t_current.y();
-  laser_odom_msg.pose.pose.position.z = t_current.z();
-  //Filling twist
-  double delta_time = rclcpp::Time(header.stamp).seconds() - prev_stamp_;
-  Eigen::Isometry3d delta_odom = ((laser_to_base_*prev_odom_ ).inverse() * odom_base_link);
-  Eigen::Vector3d t_delta = delta_odom.translation();
-  laser_odom_msg.twist.twist.linear.x = t_delta.x() / delta_time;
-  laser_odom_msg.twist.twist.linear.y = t_delta.y() / delta_time;
-  laser_odom_msg.twist.twist.linear.z = t_delta.z() / delta_time;
-  Eigen::Quaterniond q_delta(delta_odom.rotation());
-  // we use tf because euler angles in Eigen present singularity problems
-  tf2::Quaternion quat(q_delta.x(), q_delta.y(), q_delta.z(), q_delta.w());
-  tf2::Matrix3x3 m(quat);
-  double roll, pitch, yaw;
-  m.getRPY(roll, pitch, yaw);
-  laser_odom_msg.twist.twist.angular.x = roll / delta_time;
-  laser_odom_msg.twist.twist.angular.y = pitch / delta_time;
-  laser_odom_msg.twist.twist.angular.z = yaw / delta_time;
-  odom_pub_->publish(laser_odom_msg);
+    //Publishing TF
+    if (params->publish_tf_) {
+      geometry_msgs::msg::TransformStamped transform;
 
-  // Publishing twist
-  geometry_msgs::msg::TwistStamped twist_msg;
-  twist_msg.header.frame_id = params->base_frame_;
-  twist_msg.header.stamp = header.stamp;
-  twist_msg.twist = laser_odom_msg.twist.twist;
-  twist_pub_->publish(twist_msg);
+      // corresponding tf variables
+      transform.header.stamp = header.stamp;
+      transform.header.frame_id = params->fixed_frame_;
+      transform.child_frame_id = params->base_frame_;
+    
+      transform.transform.translation.x = t_current.x();
+      transform.transform.translation.y = t_current.y();
+      transform.transform.translation.z = t_current.z();
+      transform.transform.rotation.x = q_current.x();
+      transform.transform.rotation.y = q_current.y();
+      transform.transform.rotation.z = q_current.z();
+      transform.transform.rotation.w = q_current.w();
 
-  //Publishing TF
-  if (params->publish_tf_) {
-    geometry_msgs::msg::TransformStamped transform;
-
-    // corresponding tf variables
-    transform.header.stamp = header.stamp;
-    transform.header.frame_id = params->fixed_frame_;
-    transform.child_frame_id = params->base_frame_;
-  
-    transform.transform.translation.x = t_current.x();
-    transform.transform.translation.y = t_current.y();
-    transform.transform.translation.z = t_current.z();
-    transform.transform.rotation.x = q_current.x();
-    transform.transform.rotation.y = q_current.y();
-    transform.transform.rotation.z = q_current.z();
-    transform.transform.rotation.w = q_current.w();
-
-    tf_broadcaster_->sendTransform(transform);
+      tf_broadcaster_->sendTransform(transform);
+    }
   }
-}
 
 }  // namespace liodom

@@ -23,6 +23,7 @@
 #include <numeric>
 #include <thread>
 #include <deque>
+#include <tuple>
 
 // Ceres
 #include <ceres/ceres.h>
@@ -148,6 +149,14 @@ class LaserOdometer {
                           ceres::LossFunction* loss);
   void alignTrajectoryToLane();
   void updateLocalMapWithTransformation(const Eigen::Matrix2d& R, const Eigen::Vector2d& t);
+  std::vector<Eigen::Vector2d> findClosestLanePoints(const std::deque<Eigen::Isometry3d>& pose_history);
+  
+  // ICP solver method
+  std::tuple<Eigen::Matrix2d, Eigen::Vector2d, double> solveIcp2d(
+    const std::vector<Eigen::Vector2d>& source_points,
+    const std::vector<Eigen::Vector2d>& target_points,
+    int max_iterations = 50,
+    double tolerance = 1e-6);
 };
 
 }  // namespace liodom
