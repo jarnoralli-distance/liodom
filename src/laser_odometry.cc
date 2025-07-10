@@ -18,13 +18,8 @@
 */
 
 #include <liodom/laser_odometry.h>
-double angle = -55.0;
-std::string map_path = "/home/joaquinecc/Documents/dataset/kitti/dataset/map/02/lanelet2_seq_02.osm";
-std::array<double, 2> origin_coords = {48.987607723096, 8.4697469732634};
+// These parameters are now accessed through params system
 
-// double angle = -60.0;
-// std::string map_path = "/home/joaquinecc/Documents/dataset/kitti/dataset/map/00/lanelet2_seq_00.osm";
-// std::array<double, 2> origin_coords = {48.98254523586602, 8.39036610004500};
 
 namespace liodom {
 
@@ -113,11 +108,11 @@ LaserOdometer::LaserOdometer(const rclcpp::Node::SharedPtr& nh) :
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
   //Load lanlet map and projector
-  projector_ = std::make_shared<lanelet::projection::UtmProjector>(lanelet::Origin({origin_coords[0], origin_coords[1]}));
-  lanelet_map_= lanelet::load(map_path, *projector_);
+  projector_ = std::make_shared<lanelet::projection::UtmProjector>(lanelet::Origin({params->origin_coords_lanelet_[0], params->origin_coords_lanelet_[1]}));
+  lanelet_map_= lanelet::load(params->map_lanelet_path_, *projector_);
 
     // Define rotation matrix (same as before)
-  double rotation_angle = angle * (M_PI / 180.0);
+  double rotation_angle = params->angle_lanelet_correction_ * (M_PI / 180.0);
   double cos_angle = std::cos(rotation_angle);
   double sin_angle = std::sin(rotation_angle);
 

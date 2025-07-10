@@ -82,6 +82,16 @@ void Params::declareParams(const rclcpp::Node::SharedPtr& nh) {
 
   // Publish TF
   nh->declare_parameter("publish_tf", true);
+  
+  // Lanelet correction angle (degrees)
+  nh->declare_parameter("angle_lanelet_correction", -55.0);
+  
+  // Lanelet map path
+  nh->declare_parameter("map_lanelet_path", "/path/to/your/map.osm");
+  
+  // Lanelet origin coordinates [lat, lon]
+  nh->declare_parameter("origin_coords_lanelet_lat", 48.987607723096);
+  nh->declare_parameter("origin_coords_lanelet_lon", 8.4697469732634);
 }
 
 
@@ -158,6 +168,20 @@ void Params::readParams(const rclcpp::Node::SharedPtr& nh) {
   // Publish TF
   publish_tf_ = nh->get_parameter("publish_tf").as_bool();
   RCLCPP_INFO(nh->get_logger(), "Publish TF: %s", publish_tf_ ? "Yes" : "No");
+  
+  // Lanelet correction angle (degrees)
+  angle_lanelet_correction_ = nh->get_parameter("angle_lanelet_correction").as_double();
+  RCLCPP_INFO(nh->get_logger(), "Lanelet correction angle: %.2f degrees", angle_lanelet_correction_);
+  
+  // Lanelet map path
+  map_lanelet_path_ = nh->get_parameter("map_lanelet_path").as_string();
+  RCLCPP_INFO(nh->get_logger(), "Lanelet map path: %s", map_lanelet_path_.c_str());
+  
+  // Lanelet origin coordinates [lat, lon]
+  double lat = nh->get_parameter("origin_coords_lanelet_lat").as_double();
+  double lon = nh->get_parameter("origin_coords_lanelet_lon").as_double();
+  origin_coords_lanelet_ = {lat, lon};
+  RCLCPP_INFO(nh->get_logger(), "Lanelet origin coordinates: [%.12f, %.12f]", lat, lon);
 }
 
 }  // namespace liodom

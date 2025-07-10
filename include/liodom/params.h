@@ -47,6 +47,11 @@ class Params {
     bool filter_local_map_;
     bool mapping_;
     bool publish_tf_;
+    
+    // Lanelet parameters
+    double angle_lanelet_correction_;
+    std::string map_lanelet_path_;
+    std::array<double, 2> origin_coords_lanelet_;
 
     // Methods
     static Params* getInstance();

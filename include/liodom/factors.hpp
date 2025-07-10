@@ -176,61 +176,37 @@ struct ICPLaneletFactor {
     T sin_angle = ceres::sin(rotation_angle);
     
     T total_error = T(0.0);
-    T total_weight = T(0.0);
-    int valid_matches = 0;
+    // T total_weight = T(0.0);
+    // int valid_matches = 0;
     
     // For each trajectory point, find the closest lane point and compute error
     for (size_t i = 0; i < trajectory_points_.size(); ++i) {
       const auto& traj_point = trajectory_points_[i];
-      
-      // Calculate weight: newer points (higher index) get more weight
-      // Last point (current pose) gets weight 1.0, second to last gets 1/2, etc.
-      // T weight = T(1.0) / (T(trajectory_points_.size() - i) * T(trajectory_points_.size() - i));
-      // T weight = ceres::exp(T(i)); // weights grow as i increases
-      T alpha = T(0.1);  // Controls steepness; smaller = steeper
-      T exp_weight = ceres::exp(alpha * T(i));
-      T max_weight = ceres::exp(alpha * T(trajectory_points_.size() - 1));
-      T weight = exp_weight / max_weight;
+
+      T weight = T(1.0);
       T traj_x = T(traj_point.x());
       T traj_y = T(traj_point.y());
       
-      // Apply rotation and translation: x' = R*x + t
+      // Apply translation first, then rotation: x' = R*(x + t)
+      // Rotate first, then translate: x' = R*x + t
       T rotated_x = traj_x * cos_angle - traj_y * sin_angle;
       T rotated_y = traj_x * sin_angle + traj_y * cos_angle;
       T transformed_x = rotated_x + tx;
       T transformed_y = rotated_y + ty;
       
-      // Find closest lane point
-      T min_distance = T(std::numeric_limits<double>::max());
+
+      const auto& lane_point = rotated_lane_points_[i];
+      T lane_x = T(lane_point.x());
+      T lane_y = T(lane_point.y());
       
-      for (const auto& lane_point : rotated_lane_points_) {
-        T lane_x = T(lane_point.x());
-        T lane_y = T(lane_point.y());
-        
-        T dx = transformed_x - lane_x;
-        T dy = transformed_y - lane_y;
-        T distance = ceres::sqrt(dx * dx + dy * dy);
-        
-        if (distance < min_distance) {
-          min_distance = distance;
-        }
-      }
-      
-      // Only count points that are reasonably close
-      // if (min_distance < T(5.0)) {
-        total_error += weight * min_distance;
-        total_weight += weight;
-        valid_matches++;
-      // }
+      T dx = transformed_x - lane_x;
+      T dy = transformed_y - lane_y;
+      T distance = ceres::sqrt(dx * dx + dy * dy);
+
+        total_error += weight * distance;
     }
-    
-    // Return weighted average error if we have valid matches
-    if (valid_matches > 0) {
-      residual[0] = total_error / total_weight;
-    } else {
-      residual[0] = T(100000.0); // Large penalty if no valid matches
-    }
-    
+    residual[0] = total_error;
+ 
     return true;
   }
 
