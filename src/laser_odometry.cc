@@ -70,11 +70,6 @@ void LocalMapManager::setMaxFrames(const size_t max_nframes) {
   max_nframes_ = max_nframes;
 }
 
-void LocalMapManager::replaceLocalMap(const PointCloud::Ptr& new_map) {
-  // Replace the total points with the new map
-  *total_points_ = *new_map;
-}
-
 LaserOdometer::LaserOdometer(const rclcpp::Node::SharedPtr& nh) :
   nh_(nh),
   init_(false),
@@ -274,8 +269,7 @@ void LaserOdometer::operator()(std::atomic<bool>& running) {
         if (pose_history_.size() == POSE_HISTORY_SIZE) {
           // Store the old translation before any changes
             alignTrajectoryToLane();
-              // pose_history_.clear(); 
-            for (int i = 0; pose_history_.size() > 10; i++)
+            // for (int i = 0; pose_history_.size() > 10; i++)
             pose_history_.pop_front();
             
         } 
@@ -535,40 +529,9 @@ void LaserOdometer::alignTrajectoryToLane() {
         
         
         // Update local map with the same transformation
-        // updateLocalMapWithTransformation(R_total, t_total);
         pose_history_.clear();
         RCLCPP_INFO(nh_->get_logger(), "Applied ICP transformation to odometry and local map");
     }
-}
-
-void LaserOdometer::updateLocalMapWithTransformation(const Eigen::Matrix2d& R, const Eigen::Vector2d& t) {
-    // Get the current local map from the manager
-    PointCloud::Ptr current_local_map(new PointCloud);
-    lmap_manager.getLocalMap(current_local_map);
-    if (current_local_map->empty()) {
-        RCLCPP_WARN(nh_->get_logger(), "Local map is empty, skipping transformation");
-        return;
-    }
-    
-    // Create a new point cloud for the transformed points
-    PointCloud::Ptr transformed_local_map(new PointCloud);
-    transformed_local_map->points.reserve(current_local_map->size());
-    transformed_local_map->header = current_local_map->header;
-    
-    // Apply transformation to each point: new_point = R * point + t
-    for (const auto& point : current_local_map->points) {
-        Point transformed_point = point;
-        Eigen::Vector2d point_2d(point.x, point.y);
-        Eigen::Vector2d transformed_2d = R * point_2d + t;
-        transformed_point.x = transformed_2d.x();
-        transformed_point.y = transformed_2d.y();
-        // Keep z coordinate unchanged (2D transformation)
-        transformed_local_map->points.push_back(transformed_point);
-    }
-    
-    lmap_manager.replaceLocalMap(transformed_local_map);
-    RCLCPP_INFO(nh_->get_logger(), "Updated local map with ICP transformation");
-    RCLCPP_INFO(nh_->get_logger(), "Transformed %lu points in local map", transformed_local_map->size());
 }
 
 void LaserOdometer::addEdgeConstraints(const PointCloud::Ptr& edges,
