@@ -18,6 +18,13 @@
 */
 
 #include <liodom/laser_odometry.h>
+double angle = -55.0;
+std::string map_path = "/home/joaquinecc/Documents/dataset/kitti/dataset/map/02/lanelet2_seq_02.osm";
+std::array<double, 2> origin_coords = {48.987607723096, 8.4697469732634};
+
+// double angle = -60.0;
+// std::string map_path = "/home/joaquinecc/Documents/dataset/kitti/dataset/map/00/lanelet2_seq_00.osm";
+// std::array<double, 2> origin_coords = {48.98254523586602, 8.39036610004500};
 
 namespace liodom {
 
@@ -68,6 +75,11 @@ void LocalMapManager::setMaxFrames(const size_t max_nframes) {
   max_nframes_ = max_nframes;
 }
 
+void LocalMapManager::replaceLocalMap(const PointCloud::Ptr& new_map) {
+  // Replace the total points with the new map
+  *total_points_ = *new_map;
+}
+
 LaserOdometer::LaserOdometer(const rclcpp::Node::SharedPtr& nh) :
   nh_(nh),
   init_(false),
@@ -101,12 +113,27 @@ LaserOdometer::LaserOdometer(const rclcpp::Node::SharedPtr& nh) :
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
   //Load lanlet map and projector
-  // std::string map_path = "/home/joaquinecc/Documents/dataset/kitti/dataset/map/02/lanelet2_seq_02.osm";
-  // projector_ = std::make_shared<lanelet::projection::UtmProjector>(lanelet::Origin({48.987607723096, 8.4697469732634}));
-
-  std::string map_path = "/home/joaquinecc/Documents/dataset/kitti/dataset/map/00/lanelet2_seq_00.osm";
-  projector_ = std::make_shared<lanelet::projection::UtmProjector>(lanelet::Origin({48.98254523586602, 8.39036610004500}));
+  projector_ = std::make_shared<lanelet::projection::UtmProjector>(lanelet::Origin({origin_coords[0], origin_coords[1]}));
   lanelet_map_= lanelet::load(map_path, *projector_);
+
+    // Define rotation matrix (same as before)
+  double rotation_angle = angle * (M_PI / 180.0);
+  double cos_angle = std::cos(rotation_angle);
+  double sin_angle = std::sin(rotation_angle);
+
+  Eigen::Matrix2d R_M;
+  R_M << cos_angle, -sin_angle,
+          sin_angle, cos_angle;
+
+  // Gather all lanelet centerline points into a vector
+  for (const auto& lanelet : lanelet_map_->laneletLayer) {
+      auto centerline = lanelet.centerline();
+      for (const auto& point : centerline) {
+        Eigen::Vector2d correct_point(point.x(), point.y());
+        correct_point = R_M * correct_point;
+        lane_points.emplace_back(correct_point.x(), correct_point.y());
+      }
+  }
 }
 
 LaserOdometer::~LaserOdometer() {
@@ -244,7 +271,7 @@ void LaserOdometer::operator()(std::atomic<bool>& running) {
         }      
 
       
-
+ 
         // Add current pose to history first
         pose_history_.push_back(odom_);
         
@@ -253,25 +280,25 @@ void LaserOdometer::operator()(std::atomic<bool>& running) {
           // Store the old translation before any changes
             alignTrajectoryToLane();
               // pose_history_.clear(); 
-            for (int i = 0; i < 10; i++) {
-                if (!pose_history_.empty()) {
-                    pose_history_.pop_front();
-                }
-            }
-
-
-        } else {
-            RCLCPP_INFO(nh_->get_logger(), "Current odom translation: [%f, %f, %f]", 
+            for (int i = 0; pose_history_.size() > 10; i++)
+            pose_history_.pop_front();
+            
+        } 
+        RCLCPP_INFO(nh_->get_logger(), "Current odom translation: [%f, %f, %f]", 
             odom_.translation().x(), odom_.translation().y(), odom_.translation().z());
-        }
-
-
-        // Compute the position of the detectd edges according to the final estimate position
+        Eigen::Matrix3d rot = odom_.linear();
+        RCLCPP_INFO(nh_->get_logger(), "Current odom rotation matrix row 1: [%f %f %f]", rot(0,0), rot(0,1), rot(0,2));
+        RCLCPP_INFO(nh_->get_logger(), "Current odom rotation matrix row 2: [%f %f %f]", rot(1,0), rot(1,1), rot(1,2));
+        RCLCPP_INFO(nh_->get_logger(), "Current odom rotation matrix row 3: [%f %f %f]", rot(2,0), rot(2,1), rot(2,2));
+       
+       // Compute the position of the detectd edges according to the final estimate position
         PointCloud::Ptr edges_map(new PointCloud);
         pcl::transformPointCloud(*feats, *edges_map, odom_.matrix());
 
         // Save edges and update odometry window
         lmap_manager.addPointCloud(edges_map);
+
+
 
         auto end_t = Clock::now();
 
@@ -339,123 +366,215 @@ void LaserOdometer::computeLocalMap(PointCloud::Ptr& local_map_gen, PointCloud::
 void LaserOdometer::alignTrajectoryToLane() {
 
     
-    // Initialize best lane points for each trajectory point
+  // Find the closest lane point for each trajectory point  
     std::vector<Eigen::Vector2d> best_lane_points(pose_history_.size());
     std::vector<double> min_distances(pose_history_.size(), std::numeric_limits<double>::max());
-    
-    // Define rotation matrix (same as before)
-    double angle = 60.0;
-    double rotation_angle = angle * (M_PI / 180.0);
-    double cos_angle = std::cos(rotation_angle);
-    double sin_angle = std::sin(rotation_angle);
-    
-    Eigen::Matrix2d R_M;
-    R_M << cos_angle, -sin_angle,
-            sin_angle, cos_angle;
-    
-    // Check each lanelet
-    for (const auto& lanelet : lanelet_map_->laneletLayer) {
-        auto centerline = lanelet.centerline();
-        
-        // Convert lane points to 2D
-        for (const auto& point : centerline) {
-            Eigen::Vector2d lane_point(point.x(), point.y());
-            
-            // For each trajectory point, check if this lane point is the best neighbor
-            for (size_t i = 0; i < pose_history_.size(); ++i) {
-                Eigen::Vector2d traj_point(pose_history_[i].translation().x(), pose_history_[i].translation().y());
-                traj_point = R_M * traj_point;
-                
-                double dist = (traj_point - lane_point).norm();
-                
-                // If this is the best neighbor found so far for this trajectory point
-                if (dist < min_distances[i]) {
-                    min_distances[i] = dist;
-                    best_lane_points[i] = lane_point;
-                }
+    std::vector<bool> lane_point_used(lane_points.size(), false);
+    std::vector<Eigen::Vector2d> trajectory_points(pose_history_.size());;
+
+    for (int i = static_cast<int>(pose_history_.size()) - 1; i >= 0; --i) {
+        Eigen::Vector2d traj_point(pose_history_[i].translation().x(), pose_history_[i].translation().y());
+
+        double best_dist = std::numeric_limits<double>::max();
+        int best_idx = -1;
+        for (size_t j = 0; j < lane_points.size(); ++j) {
+            if (lane_point_used[j]) continue;
+            double dist = (traj_point - lane_points[j]).norm();
+            if (dist < best_dist) {
+                best_dist = dist;
+                best_idx = static_cast<int>(j);
             }
         }
+            trajectory_points[i]= traj_point;
+            min_distances[i] = best_dist;
+            best_lane_points[i] = lane_points[best_idx];
+            lane_point_used[best_idx] = true; // Mark as used so only one trajectory point gets each neighbor
     }
+
+    // Apply 2D ICP (iterative) from trajectory_points to best_lane_points to find tx, ty, rot
     
-    // Calculate average distance
-    double total_distance = 0.0;
-    for (double dist : min_distances) {
-        total_distance += dist;
+    std::vector<Eigen::Vector2d> src_points = trajectory_points;
+    std::vector<Eigen::Vector2d> tgt_points = best_lane_points;
+
+    // ICP parameters
+    const int max_iterations = 50;
+    const double tolerance = 1e-6;
+    double prev_error = std::numeric_limits<double>::max();
+    size_t N = src_points.size();
+
+    // Initialize transformation
+    double theta = 0.0;
+    Eigen::Matrix2d R_total = Eigen::Matrix2d::Identity();
+    Eigen::Vector2d t_total = Eigen::Vector2d::Zero();
+    double mean_error = 0.0;
+
+    
+    for (int iter = 0; iter < max_iterations; ++iter) {
+        // Find closest target point for each source point (here, 1-to-1, so just use tgt_points)
+        // Compute centroids
+        Eigen::Vector2d centroid_src = Eigen::Vector2d::Zero();
+        Eigen::Vector2d centroid_tgt = Eigen::Vector2d::Zero();
+        for (size_t i = 0; i < N; ++i) {
+            centroid_src += src_points[i];
+            centroid_tgt += tgt_points[i];
+        }
+        centroid_src /= static_cast<double>(N);
+        centroid_tgt /= static_cast<double>(N);
+
+        // Center the points
+        std::vector<Eigen::Vector2d> src_centered(N), tgt_centered(N);
+        for (size_t i = 0; i < N; ++i) {
+            src_centered[i] = src_points[i] - centroid_src;
+            tgt_centered[i] = tgt_points[i] - centroid_tgt;
+        }
+
+        // Compute cross-covariance
+        Eigen::Matrix2d W = Eigen::Matrix2d::Zero();
+        for (size_t i = 0; i < N; ++i) {
+            W += src_centered[i]* tgt_centered[i].transpose();
+        }
+
+        // // SVD for optimal rotation
+        // Eigen::JacobiSVD<Eigen::Matrix2d> svd(W, Eigen::ComputeFullU | Eigen::ComputeFullV);
+        // Eigen::Matrix2d U = svd.matrixU();
+        // Eigen::Matrix2d V = svd.matrixV();
+        // double d = (V * U.transpose()).determinant();
+        // Eigen::Matrix2d R = V * Eigen::DiagonalMatrix<double, 2>(1, d) * U.transpose();
+
+        // SVD for optimal rotation
+        Eigen::JacobiSVD<Eigen::Matrix2d> svd(W, Eigen::ComputeFullU | Eigen::ComputeFullV);
+        Eigen::Matrix2d U = svd.matrixU();
+        Eigen::Matrix2d V = svd.matrixV();
+        Eigen::Matrix2d R = V * U.transpose();
+
+        // Ensure proper rotation (determinant = 1)
+        if (R.determinant() < 0) {
+            V.col(1) *= -1;
+            R = V * U.transpose();
+        }
+        // Compute translation
+        Eigen::Vector2d t = centroid_tgt - R * centroid_src;
+
+        // Update cumulative transformation
+        R_total = R * R_total;
+        t_total = R * t_total + t;
+
+        // Apply transformation to src_points for next iteration
+        for (size_t i = 0; i < N; ++i) {
+            src_points[i] = R * src_points[i] + t;
+        }
+
+        // Compute mean error
+        mean_error = 0.0;
+        for (size_t i = 0; i < N; ++i) {
+            mean_error += (src_points[i] - tgt_points[i]).norm();
+        }
+        mean_error /= static_cast<double>(N);
+
+        if (std::abs(prev_error - mean_error) < tolerance) {
+            break;
+        }
+        prev_error = mean_error;
     }
-    double avg_distance = total_distance / pose_history_.size();
-    
-    RCLCPP_INFO(nh_->get_logger(), "Found best neighbors with average distance: %f", avg_distance);
-    
-    // Prepare trajectory and lane points for ICP optimization
-    std::vector<Eigen::Vector2d> trajectory_points;
-    
-    // Add current trajectory points (in original coordinate system)
-    for (const auto& pose : pose_history_) {
-        Eigen::Vector2d traj_point(pose.translation().x(), pose.translation().y());
-        trajectory_points.push_back(traj_point);
+
+    // Use R_total (2x2 rotation matrix) and t_total (2x1 translation vector) directly
+
+    // Calculate the distance between current and new position for the last pose
+
+    // Calculate average distance from original traj to transformed traj
+    double total_traj_to_transf = 0.0;
+    double total_orig_to_lane = 0.0;
+    std::vector<Eigen::Vector2d> transformed_traj;
+    for (size_t i = 0; i < pose_history_.size(); ++i) {
+        const auto& pose = pose_history_[i];
+        Eigen::Vector2d orig_xy(pose.translation().x(), pose.translation().y());
+        // Apply rotation and translation: x' = R*x + t
+        Eigen::Vector2d new_xy = R_total * orig_xy + t_total;
+        transformed_traj.push_back(new_xy);
+        double dist = (new_xy - orig_xy).norm();
+        total_traj_to_transf += dist;
+
+        // Calculate original error: distance from original traj to lane point
+        if (i < best_lane_points.size()) {
+            double orig_to_lane = (orig_xy - best_lane_points[i]).norm();
+            total_orig_to_lane += orig_to_lane;
+        }
     }
-    
+    double avg_traj_to_transf = (transformed_traj.size() > 0) ? (total_traj_to_transf / transformed_traj.size()) : 0.0;
+    double avg_orig_to_lane = (transformed_traj.size() > 0) ? (total_orig_to_lane / transformed_traj.size()) : 0.0;
 
-    
-    // Set up Ceres optimization for ICP-like alignment
-    ceres::Problem::Options problem_options;
-    ceres::Problem problem(problem_options);
-    
-    // Parameters: [tx, ty, rotation_angle] (initialized to zero)
-    double transform_params[3] = {0.0, 0.0, 0.0};
-    problem.AddParameterBlock(transform_params, 3);
-    
-    // Add ICP cost function
-    ceres::CostFunction* icp_cost_function = ICPLaneletFactor::create(trajectory_points, best_lane_points,-angle * (M_PI / 180.0));
-    problem.AddResidualBlock(icp_cost_function, new ceres::HuberLoss(0.2), transform_params);
-    
-    // Solve the optimization
-    ceres::Solver::Options options;
-    options.linear_solver_type = ceres::DENSE_QR;
-    options.max_num_iterations = 20;
-    options.minimizer_progress_to_stdout = false;
-    ceres::Solver::Summary summary;
-    ceres::Solve(options, &problem, &summary);
-    
-    // Apply the optimized 2D transformation to current pose with distance checking
-    Eigen::Vector3d current_translation = odom_.translation();
-    
-    Eigen::Vector3d new_translation = current_translation;
-    
+    // Calculate average distance from transformed traj to closest point in lane_points
+    double icp_error = 0.0;
+    for (int i = 0; i < transformed_traj.size(); i++) {
+      Eigen::Vector2d traj_point = transformed_traj[i];
+      Eigen::Vector2d lane_point = best_lane_points[i];
+      double d = (traj_point - lane_point).norm();
+      icp_error += d;
+    }
+    icp_error /= transformed_traj.size();
+    // Print the last value of traj to transformed traj
+    Eigen::Vector2d traj_point = transformed_traj[pose_history_.size() - 1];
+    Eigen::Vector2d last_lane_point = best_lane_points[pose_history_.size() - 1];
+    double last_traj_to_transf = (traj_point - last_lane_point).norm();
 
-    // Construct rotation matrix from rotation parameter
-    double new_cos_angle = std::cos(transform_params[2]);
-    double new_sin_angle = std::sin(transform_params[2]);
-    
-    // Apply rotation and translation: x' = R*x + t
-    new_translation.x() = current_translation.x() * new_cos_angle - current_translation.y() * new_sin_angle;
-    new_translation.y() = current_translation.x() * new_sin_angle + current_translation.y() * new_cos_angle;
-    
-    
-    // // Calculate the distance between current and new position
-    double distance = (new_translation - current_translation).norm();
-    double final_cost = summary.final_cost;
-    // Only apply changes if distance is less than 2 meters
+    RCLCPP_INFO(nh_->get_logger(), 
+        "ICP error %f, mean error %f,  orig error %f, avg traj->transf %f, last traj->transf %f", 
+        icp_error, mean_error, avg_orig_to_lane, avg_traj_to_transf, last_traj_to_transf);
+    RCLCPP_INFO(nh_->get_logger(), "Transform matrix:\n[%f %f; %f %f], translation: [%f, %f]", 
+        R_total(0,0), R_total(0,1), R_total(1,0), R_total(1,1), t_total.x(), t_total.y());
 
-      RCLCPP_INFO(nh_->get_logger(), "ICP error %f and distance %f", final_cost, distance );
-
-    if ( final_cost < 0.5 and distance<1.5) {
-        odom_.translation() = new_translation;
+    if (icp_error < 10.0) {
+        // Apply ICP transformation to current odometry
+        Eigen::Vector2d current_translation(odom_.translation().x(), odom_.translation().y());
+        Eigen::Vector2d new_translation = R_total * current_translation + t_total;
         
-        RCLCPP_INFO(nh_->get_logger(), "Applied ICP trajectory alignment: translation [%f, %f], rotation [%f rad]", 
-                    transform_params[0], transform_params[1], transform_params[2]);
-    } 
-         RCLCPP_INFO(nh_->get_logger(), "New translation: [%f, %f]", 
-                    new_translation.x(), new_translation.y());
-         RCLCPP_INFO(nh_->get_logger(), "OLD translation: [%f, %f]", 
-                    current_translation.x(), current_translation.y());
-
-
-    
-    // RCLCPP_INFO(nh_->get_logger(), "Applied ICP trajectory alignment: translation [%f, %f]", 
-    //             translation_params[0], translation_params[1]);
+        // Update odometry translation
+        odom_.translation().x() = new_translation.x();
+        odom_.translation().y() = new_translation.y();
+        
+        // Update prev_odom_ translation as well
+        Eigen::Vector2d prev_translation(prev_odom_.translation().x(), prev_odom_.translation().y());
+        Eigen::Vector2d new_prev_translation = R_total * prev_translation + t_total;
+        prev_odom_.translation().x() = new_prev_translation.x();
+        prev_odom_.translation().y() = new_prev_translation.y();
+        
+        
+        // Update local map with the same transformation
+        // updateLocalMapWithTransformation(R_total, t_total);
+        pose_history_.clear();
+        RCLCPP_INFO(nh_->get_logger(), "Applied ICP transformation to odometry and local map");
+    }
 }
 
+void LaserOdometer::updateLocalMapWithTransformation(const Eigen::Matrix2d& R, const Eigen::Vector2d& t) {
+    // Get the current local map from the manager
+    PointCloud::Ptr current_local_map(new PointCloud);
+    lmap_manager.getLocalMap(current_local_map);
+    if (current_local_map->empty()) {
+        RCLCPP_WARN(nh_->get_logger(), "Local map is empty, skipping transformation");
+        return;
+    }
+    
+    // Create a new point cloud for the transformed points
+    PointCloud::Ptr transformed_local_map(new PointCloud);
+    transformed_local_map->points.reserve(current_local_map->size());
+    transformed_local_map->header = current_local_map->header;
+    
+    // Apply transformation to each point: new_point = R * point + t
+    for (const auto& point : current_local_map->points) {
+        Point transformed_point = point;
+        Eigen::Vector2d point_2d(point.x, point.y);
+        Eigen::Vector2d transformed_2d = R * point_2d + t;
+        transformed_point.x = transformed_2d.x();
+        transformed_point.y = transformed_2d.y();
+        // Keep z coordinate unchanged (2D transformation)
+        transformed_local_map->points.push_back(transformed_point);
+    }
+    
+    lmap_manager.replaceLocalMap(transformed_local_map);
+    RCLCPP_INFO(nh_->get_logger(), "Updated local map with ICP transformation");
+    RCLCPP_INFO(nh_->get_logger(), "Transformed %lu points in local map", transformed_local_map->size());
+}
 
 void LaserOdometer::addEdgeConstraints(const PointCloud::Ptr& edges,
                         const PointCloud::Ptr& local_map_gen,
@@ -616,6 +735,6 @@ void LaserOdometer::publishOdom(const std_msgs::msg::Header& header, const Eigen
 
     tf_broadcaster_->sendTransform(transform);
   }
-}alignTrajectoryToLane
+}
 
 }  // namespace liodom

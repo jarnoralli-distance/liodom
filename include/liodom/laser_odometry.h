@@ -83,6 +83,7 @@ class LocalMapManager {
   void addPointCloud(const PointCloud::Ptr& pc);
   size_t getLocalMap(PointCloud::Ptr& map);
   void setMaxFrames(const size_t max_nframes);
+  void replaceLocalMap(const PointCloud::Ptr& new_map);
 
  private:
   PointCloud::Ptr total_points_;
@@ -130,7 +131,8 @@ class LaserOdometer {
   double last_out_time_secs_;
   lanelet::Id current_lanelet_id_;
   std::deque<Eigen::Isometry3d> pose_history_;
-  static const int POSE_HISTORY_SIZE = 50;
+  static const int POSE_HISTORY_SIZE = 100;
+  std::vector<Eigen::Vector2d> lane_points;
 
   void computeLocalMap(PointCloud::Ptr& local_map_gen, PointCloud::Ptr& local_map_rec);
   void addEdgeConstraints(const PointCloud::Ptr& edges,
@@ -145,6 +147,7 @@ class LaserOdometer {
                           ceres::Problem* problem,
                           ceres::LossFunction* loss);
   void alignTrajectoryToLane();
+  void updateLocalMapWithTransformation(const Eigen::Matrix2d& R, const Eigen::Vector2d& t);
 };
 
 }  // namespace liodom
