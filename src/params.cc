@@ -92,6 +92,15 @@ void Params::declareParams(const rclcpp::Node::SharedPtr& nh) {
   // Lanelet origin coordinates [lat, lon]
   nh->declare_parameter("origin_coords_lanelet_lat", 48.987607723096);
   nh->declare_parameter("origin_coords_lanelet_lon", 8.4697469732634);
+  
+  // ICP optimization
+  nh->declare_parameter("use_icp_optimization", false);
+  
+  // Normal shooting correspondences
+  nh->declare_parameter("use_normal_shooting", false);
+  
+  // Pose history size for ICP
+  nh->declare_parameter("pose_history_size", 50);
 }
 
 
@@ -182,6 +191,18 @@ void Params::readParams(const rclcpp::Node::SharedPtr& nh) {
   double lon = nh->get_parameter("origin_coords_lanelet_lon").as_double();
   origin_coords_lanelet_ = {lat, lon};
   RCLCPP_INFO(nh->get_logger(), "Lanelet origin coordinates: [%.12f, %.12f]", lat, lon);
+  
+  // ICP optimization
+  use_icp_optimization_ = nh->get_parameter("use_icp_optimization").as_bool();
+  RCLCPP_INFO(nh->get_logger(), "Use ICP optimization: %s", use_icp_optimization_ ? "Yes" : "No");
+  
+  // Normal shooting correspondences
+  use_normal_shooting_ = nh->get_parameter("use_normal_shooting").as_bool();
+  RCLCPP_INFO(nh->get_logger(), "Use normal shooting: %s", use_normal_shooting_ ? "Yes" : "No");
+  
+  // Pose history size for ICP
+  pose_history_size_ = nh->get_parameter("pose_history_size").as_int();
+  RCLCPP_INFO(nh->get_logger(), "Pose history size: %i", pose_history_size_);
 }
 
 }  // namespace liodom

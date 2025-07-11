@@ -133,7 +133,6 @@ class LaserOdometer {
   double last_out_time_secs_;
   lanelet::Id current_lanelet_id_;
   std::deque<Eigen::Isometry3d> pose_history_;
-  static const int POSE_HISTORY_SIZE = 100;
   std::vector<Eigen::Vector2d> lane_points;
 
   void computeLocalMap(PointCloud::Ptr& local_map_gen, PointCloud::Ptr& local_map_rec);

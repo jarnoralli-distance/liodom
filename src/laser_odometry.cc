@@ -265,8 +265,8 @@ namespace liodom {
           // Add current pose to history first
           pose_history_.push_back(odom_);
           
-          // Only run alignment when pose history reaches full size
-          if (pose_history_.size() == POSE_HISTORY_SIZE) {
+          // Only run alignment when pose history reaches full size and ICP optimization is enabled
+          if (params->use_icp_optimization_ && pose_history_.size() == params->pose_history_size_) {
             // Store the old translation before any changes
               alignTrajectoryToLane();
               if  (pose_history_.size() > 0)
@@ -350,16 +350,21 @@ namespace liodom {
   void LaserOdometer::alignTrajectoryToLane() {
 
       // First find the closest lane points for each trajectory point
+      std::vector<Eigen::Vector2d> closest_lane_points = findClosestLanePoints(pose_history_);
       
       // Create trajectory points vector
       std::vector<Eigen::Vector2d> trajectory_points(pose_history_.size());
       for (size_t i = 0; i < pose_history_.size(); ++i) {
           trajectory_points[i] = Eigen::Vector2d(pose_history_[i].translation().x(), pose_history_[i].translation().y());
       }
-      std::vector<Eigen::Vector2d> closest_lane_points = findClosestLanePoints(pose_history_);
 
-      // Then apply normal shooting correspondences using the closest points as candidates
-      std::vector<Eigen::Vector2d> best_lane_points = findNormalShootingCorrespondences(trajectory_points, closest_lane_points);
+      // Use normal shooting if enabled, otherwise use closest points directly
+      std::vector<Eigen::Vector2d> best_lane_points;
+      if (params->use_normal_shooting_) {
+          best_lane_points = findNormalShootingCorrespondences(trajectory_points, closest_lane_points);
+      } else {
+          best_lane_points = closest_lane_points;
+      }
 
       // Filter out invalid correspondences (if any)
       std::vector<Eigen::Vector2d> valid_trajectory_points;

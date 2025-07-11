@@ -22,15 +22,32 @@
     <param name="base_frame" value="base_link" />
     <param name="laser_frame" value="velo_link" />
     <param name="use_imu" value="true" />
-    <param name="save_results" value="true" />    
-    <param name="save_results_dir" value="/home/joaquinecc/Documents/ros_projects/results/" />
+    <param name="save_results" value="false" />    
+    <param name="save_results_dir" value="/home/joaquinecc/Documents/ros_projects/results/liodom/02/" />
     <param name="mapping" value="$(var mapping)" />
-    <param name="publish_tf" value="true" />
+    <param name="publish_tf" value="false" />
     <param name="use_sim_time" value="true"/>
-    
+
     <remap from="points" to="/kitti/velo/pointcloud" />
-<remap from="imu" to="/kitti/oxts/imu" />
+    <remap from="imu" to="/kitti/oxts/imu" />
     <remap from="map" to="/liodom_mapper/map_local" />
+
+    <!-- Lanelet parameters -->
+    <!-- <param name="map_lanelet_path" value="/home/joaquinecc/Documents/dataset/kitti/dataset/map/02/lanelet2_seq_02.osm"/>
+    <param name="origin_coords_lanelet_lat" value="48.987607723096"/>
+    <param name="origin_coords_lanelet_lon" value="8.4697469732634"/>
+    <param name="angle_lanelet_correction" value="-53.5"/> -->
+
+    <param name="map_lanelet_path" value="/home/joaquinecc/Documents/dataset/kitti/dataset/map/00/lanelet2_seq_00.osm"/>
+    <param name="origin_coords_lanelet_lat" value="48.98254523586602"/>
+    <param name="origin_coords_lanelet_lon" value="8.39036610004500"/>
+    <param name="angle_lanelet_correction" value="-59.0"/>
+    
+    <!-- ICP optimization parameters -->
+    <param name="use_icp_optimization" value="true" />
+    <param name="use_normal_shooting" value="true" />
+    <param name="pose_history_size" value="50" />
+
 
   </node>
 

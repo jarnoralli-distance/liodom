@@ -52,6 +52,11 @@ class Params {
     double angle_lanelet_correction_;
     std::string map_lanelet_path_;
     std::array<double, 2> origin_coords_lanelet_;
+    
+    // ICP optimization parameters
+    bool use_icp_optimization_;
+    bool use_normal_shooting_;
+    int pose_history_size_;
 
     // Methods
     static Params* getInstance();
