@@ -269,17 +269,11 @@ namespace liodom {
           if (pose_history_.size() == POSE_HISTORY_SIZE) {
             // Store the old translation before any changes
               alignTrajectoryToLane();
-              // for (int i = 0; pose_history_.size() > 10; i++)
               if  (pose_history_.size() > 0)
                 pose_history_.pop_front();
               
           } 
-          RCLCPP_INFO(nh_->get_logger(), "Current odom translation: [%f, %f, %f]", 
-              odom_.translation().x(), odom_.translation().y(), odom_.translation().z());
-          Eigen::Matrix3d rot = odom_.linear();
-          RCLCPP_INFO(nh_->get_logger(), "Current odom rotation matrix row 1: [%f %f %f]", rot(0,0), rot(0,1), rot(0,2));
-          RCLCPP_INFO(nh_->get_logger(), "Current odom rotation matrix row 2: [%f %f %f]", rot(1,0), rot(1,1), rot(1,2));
-          RCLCPP_INFO(nh_->get_logger(), "Current odom rotation matrix row 3: [%f %f %f]", rot(2,0), rot(2,1), rot(2,2));
+   
         
         // Compute the position of the detectd edges according to the final estimate position
           PointCloud::Ptr edges_map(new PointCloud);
@@ -355,38 +349,62 @@ namespace liodom {
 
   void LaserOdometer::alignTrajectoryToLane() {
 
-      // Find the closest lane point for each trajectory point using the new method
-      std::vector<Eigen::Vector2d> best_lane_points = findClosestLanePoints(pose_history_);
+      // First find the closest lane points for each trajectory point
       
       // Create trajectory points vector
       std::vector<Eigen::Vector2d> trajectory_points(pose_history_.size());
       for (size_t i = 0; i < pose_history_.size(); ++i) {
           trajectory_points[i] = Eigen::Vector2d(pose_history_[i].translation().x(), pose_history_[i].translation().y());
       }
+      std::vector<Eigen::Vector2d> closest_lane_points = findClosestLanePoints(pose_history_);
+
+      // Then apply normal shooting correspondences using the closest points as candidates
+      std::vector<Eigen::Vector2d> best_lane_points = findNormalShootingCorrespondences(trajectory_points, closest_lane_points);
+
+      // Filter out invalid correspondences (if any)
+      std::vector<Eigen::Vector2d> valid_trajectory_points;
+      std::vector<Eigen::Vector2d> valid_lane_points;
+      
+      for (size_t i = 0; i < best_lane_points.size(); ++i) {
+          // Check if the lane point is valid (not NaN or invalid)
+          if (std::isfinite(best_lane_points[i].x()) && std::isfinite(best_lane_points[i].y())) {
+              valid_trajectory_points.push_back(trajectory_points[i]);
+              valid_lane_points.push_back(best_lane_points[i]);
+          }
+      }
+      
+      // Only proceed if we have enough valid correspondences
+      if (valid_trajectory_points.size() < 3) {
+          RCLCPP_WARN(nh_->get_logger(), "Not enough valid correspondences for ICP alignment");
+          return;
+      }
+      
+      RCLCPP_INFO(nh_->get_logger(), "Found %zu valid correspondences out of %zu trajectory points", 
+                  valid_trajectory_points.size(), trajectory_points.size());
 
       // Apply 2D ICP using the new solver method
-      auto [R_total, t_total, mean_error] = solveIcp2d(trajectory_points, best_lane_points);
+      auto [R_total, t_total, mean_error] = solveIcp2d(valid_trajectory_points, valid_lane_points);
 
 
       // Calculate average distance from original traj to closest point in lane_points (original error)
       double orig_error = 0.0;
-      for (int i = 0; i < trajectory_points.size(); i++) {
-        Eigen::Vector2d traj_point = trajectory_points[i];
-        Eigen::Vector2d lane_point = best_lane_points[i];
+      for (int i = 0; i < valid_trajectory_points.size(); i++) {
+        Eigen::Vector2d traj_point = valid_trajectory_points[i];
+        Eigen::Vector2d lane_point = valid_lane_points[i];
         double d = (traj_point - lane_point).norm();
         orig_error += d;
       }
-      orig_error /= trajectory_points.size();
+      orig_error /= valid_trajectory_points.size();
 
       // Calculate average distance from transformed traj to closest point in lane_points (ICP error)
       double icp_error = 0.0;
-      for (int i = 0; i < trajectory_points.size(); i++) {
-        Eigen::Vector2d transformed_point = R_total * trajectory_points[i] + t_total;
-        Eigen::Vector2d lane_point = best_lane_points[i];
+      for (int i = 0; i < valid_trajectory_points.size(); i++) {
+        Eigen::Vector2d transformed_point = R_total * valid_trajectory_points[i] + t_total;
+        Eigen::Vector2d lane_point = valid_lane_points[i];
         double d = (transformed_point - lane_point).norm();
         icp_error += d;
       }
-      icp_error /= trajectory_points.size();
+      icp_error /= valid_trajectory_points.size();
 
       RCLCPP_INFO(nh_->get_logger(),"ICP error %f,  orig error %f", icp_error, orig_error );
       // RCLCPP_INFO(nh_->get_logger(), "Transform matrix:\n[%f %f; %f %f], translation: [%f, %f]", 
@@ -409,7 +427,7 @@ namespace liodom {
           
           
           // Update local map with the same transformation
-          // Update all poses in pose_history_ with the new R_total and t_total and save back
+   
           pose_history_.clear();
           RCLCPP_INFO(nh_->get_logger(), "Applied ICP transformation to odometry and local map");
     }
@@ -538,6 +556,106 @@ namespace liodom {
       }
       
       return best_lane_points;
+  }
+
+  std::vector<Eigen::Vector2d> LaserOdometer::findNormalShootingCorrespondences(const std::vector<Eigen::Vector2d>& trajectory_points, 
+                                                                                const std::vector<Eigen::Vector2d>& closest_lane_points) {
+      std::vector<Eigen::Vector2d> correspondences(trajectory_points.size());
+      std::vector<bool> lane_point_used(closest_lane_points.size(), false);
+      
+      // Process points in reverse order to prioritize latest points
+      for (int i = static_cast<int>(trajectory_points.size()) - 1; i >= 0; --i) {
+          Eigen::Vector2d p = trajectory_points[i];
+          
+          // Estimate tangent: use previous and next point if possible
+          Eigen::Vector2d tangent;
+          if (i > 0 && i < static_cast<int>(trajectory_points.size()) - 1) {
+              tangent = trajectory_points[i+1] - trajectory_points[i-1];
+          } else if (i < static_cast<int>(trajectory_points.size()) - 1) {
+              tangent = trajectory_points[i+1] - p;
+          } else if (i > 0) {
+              tangent = p - trajectory_points[i-1];
+          } else {
+              tangent = Eigen::Vector2d(1.0, 0.0); // Default direction
+          }
+          
+          tangent = tangent / (tangent.norm() + 1e-8);
+          // Normal is perpendicular to tangent
+          Eigen::Vector2d normal(-tangent.y(), tangent.x());
+          
+          // For each map segment, check for intersection with the normal line
+          double min_dist = std::numeric_limits<double>::max();
+          int best_idx = -1;
+          Eigen::Vector2d best_proj;
+          
+          std::vector<int> available_indices;
+          for (size_t j = 0; j < closest_lane_points.size(); ++j) {
+              if (!lane_point_used[j]) {
+                  available_indices.push_back(j);
+              }
+          }
+          
+          if (available_indices.size() < 2) {
+              correspondences[i] = closest_lane_points[0]; // Fallback
+              continue;
+          }
+          
+          for (size_t j = 0; j < available_indices.size() - 1; ++j) {
+              int idx1 = available_indices[j];
+              int idx2 = available_indices[j+1];
+              Eigen::Vector2d a = closest_lane_points[idx1];
+              Eigen::Vector2d b = closest_lane_points[idx2];
+              
+              // Line segment ab, normal line through p in direction 'normal'
+              // Solve for intersection: a + t*(b-a) = p + s*normal
+              Eigen::Matrix2d A;
+              A.col(0) = b - a;
+              A.col(1) = -normal;
+              
+              if (A.determinant() < 1e-8) {
+                  continue; // Parallel, skip
+              }
+              
+              Eigen::Vector2d sol = A.inverse() * (p - a);
+              double t = sol(0);
+              double s = sol(1);
+              
+              if (t >= 0 && t <= 1) {
+                  Eigen::Vector2d intersection = a + t * (b - a);
+                  double dist = (intersection - p).norm();
+                  if (dist < min_dist) {
+                      min_dist = dist;
+                      best_idx = (dist < (a - intersection).norm()) ? idx1 : idx2;
+                      best_proj = intersection;
+                  }
+              }
+          }
+          
+          if (best_idx >= 0) {
+              correspondences[i] = closest_lane_points[best_idx];
+              lane_point_used[best_idx] = true; // Mark as used
+          } else {
+              // Fallback to closest point if no intersection found
+              double best_dist = std::numeric_limits<double>::max();
+              for (size_t j = 0; j < closest_lane_points.size(); ++j) {
+                  if (!lane_point_used[j]) {
+                      double dist = (p - closest_lane_points[j]).norm();
+                      if (dist < best_dist) {
+                          best_dist = dist;
+                          best_idx = static_cast<int>(j);
+                      }
+                  }
+              }
+              if (best_idx >= 0) {
+                  correspondences[i] = closest_lane_points[best_idx];
+                  lane_point_used[best_idx] = true;
+              } else {
+                  correspondences[i] = closest_lane_points[0]; // Final fallback
+              }
+          }
+      }
+      
+      return correspondences;
   }
 
   void LaserOdometer::addEdgeConstraints(const PointCloud::Ptr& edges,

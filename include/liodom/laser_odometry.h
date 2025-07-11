@@ -24,6 +24,7 @@
 #include <thread>
 #include <deque>
 #include <tuple>
+#include <cmath>
 
 // Ceres
 #include <ceres/ceres.h>
@@ -150,6 +151,10 @@ class LaserOdometer {
   void alignTrajectoryToLane();
   void updateLocalMapWithTransformation(const Eigen::Matrix2d& R, const Eigen::Vector2d& t);
   std::vector<Eigen::Vector2d> findClosestLanePoints(const std::deque<Eigen::Isometry3d>& pose_history);
+  
+  // Normal shooting correspondences method
+  std::vector<Eigen::Vector2d> findNormalShootingCorrespondences(const std::vector<Eigen::Vector2d>& trajectory_points, 
+                                                                 const std::vector<Eigen::Vector2d>& closest_lane_points);
   
   // ICP solver method
   std::tuple<Eigen::Matrix2d, Eigen::Vector2d, double> solveIcp2d(
