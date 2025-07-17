@@ -58,3 +58,6 @@ config/logging.conf
 *.launch
 temp.*
 note.txt
+*.py
+*._pycache_
+*.pyc

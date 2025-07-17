@@ -74,6 +74,10 @@
 #include <lanelet2_projection/UTM.h>
 #include <lanelet2_matching/LaneletMatching.h>
 // #include <lanelet2_matching/Matching.h>
+
+#include <algorithm>
+#include <set>
+#include <limits>
 namespace liodom {
 
 // Local Map manager
@@ -134,6 +138,8 @@ class LaserOdometer {
   lanelet::Id current_lanelet_id_;
   std::deque<Eigen::Isometry3d> pose_history_;
   std::vector<Eigen::Vector2d> lane_points;
+  pcl::KdTreeFLANN<Point>::Ptr lane_kdtree_;
+  PointCloud::Ptr lane_cloud_;
 
   void computeLocalMap(PointCloud::Ptr& local_map_gen, PointCloud::Ptr& local_map_rec);
   void addEdgeConstraints(const PointCloud::Ptr& edges,
@@ -161,6 +167,33 @@ class LaserOdometer {
     const std::vector<Eigen::Vector2d>& target_points,
     int max_iterations = 50,
     double tolerance = 1e-6);
+  
+  // Geometric pose correction method - finds intersection of perpendicular lines
+  Eigen::Vector2d findGeometricIntersection(const Eigen::Vector2d& pn_minus_1, 
+                                           const Eigen::Vector2d& pn, 
+                                           const Eigen::Vector2d& pn_prime);
+  
+  // K-nearest neighbors method for finding k closest lane point indices for each trajectory point
+  // Returns a vector of vectors: each inner vector contains k closest indices for one trajectory point
+  std::vector<std::vector<size_t>> findKClosestNeighborsForPoints(
+    const std::vector<Eigen::Vector2d>& map_points,
+    const std::vector<Eigen::Vector2d>& points,
+    int k = 1);
+  
+  // K-nearest neighbors method using PCL KD-tree for efficient search
+  // Returns a vector of vectors: each inner vector contains k closest indices for one trajectory point
+  std::vector<std::vector<size_t>> findKClosestNeighborsForPointsKdTree(
+    const std::vector<Eigen::Vector2d>& points,
+    int k = 3);
+  
+  // Normal shooting from KNN correspondences
+  std::vector<Eigen::Vector2d> findNormalShootingFromKnn(
+    const std::vector<Eigen::Vector2d>& trajectory_points,
+    const std::vector<std::vector<size_t>>& knn_indices,
+    const std::vector<Eigen::Vector2d>& map_points);
+  
+  // Helper method to extract trajectory points from pose history
+  std::vector<Eigen::Vector2d> extractTrajectoryPoints(const std::deque<Eigen::Isometry3d>& pose_history);
 };
 
 }  // namespace liodom

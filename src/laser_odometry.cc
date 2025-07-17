@@ -18,6 +18,7 @@
 */
 
 #include <liodom/laser_odometry.h>
+
 // These parameters are now accessed through params system
 
 
@@ -124,6 +125,20 @@ namespace liodom {
           lane_points.emplace_back(correct_point.x(), correct_point.y());
         }
     }
+    
+    // Build KD-tree for lane points (2D only, z=0)
+    lane_kdtree_ = std::make_shared<pcl::KdTreeFLANN<Point>>();
+    lane_cloud_ = std::make_shared<PointCloud>();
+    lane_cloud_->reserve(lane_points.size());
+    for (const auto& point : lane_points) {
+      Point pcl_point;
+      pcl_point.x = point.x();
+      pcl_point.y = point.y();
+      pcl_point.z = 0.0;  // Z is always 0 for 2D lane points
+      lane_cloud_->push_back(pcl_point);
+    }
+    lane_kdtree_->setInputCloud(lane_cloud_);
+    
   }
 
   LaserOdometer::~LaserOdometer() {
@@ -260,12 +275,15 @@ namespace liodom {
             odom_.translation() = Eigen::Vector3d(param_t[0], param_t[1], param_t[2]);
           }      
 
-        
   
+          if  (pose_history_.size() == params->pose_history_size_)
+                pose_history_.pop_front();
           // Add current pose to history first
           pose_history_.push_back(odom_);
-          
+
+
           // Only run alignment when pose history reaches full size and ICP optimization is enabled
+          // if (params->use_icp_optimization_ && pose_history_.size() == params->pose_history_size_) {
           if (params->use_icp_optimization_ && pose_history_.size() == params->pose_history_size_) {
             // Store the old translation before any changes
               alignTrajectoryToLane();
@@ -349,43 +367,44 @@ namespace liodom {
 
   void LaserOdometer::alignTrajectoryToLane() {
 
-      // First find the closest lane points for each trajectory point
-      std::vector<Eigen::Vector2d> closest_lane_points = findClosestLanePoints(pose_history_);
-      
-      // Create trajectory points vector
-      std::vector<Eigen::Vector2d> trajectory_points(pose_history_.size());
-      for (size_t i = 0; i < pose_history_.size(); ++i) {
-          trajectory_points[i] = Eigen::Vector2d(pose_history_[i].translation().x(), pose_history_[i].translation().y());
-      }
-
-      // Use normal shooting if enabled, otherwise use closest points directly
+  
+      std::vector<Eigen::Vector2d> trajectory_points = extractTrajectoryPoints(pose_history_);
+      // // Use normal shooting if enabled, otherwise use closest points directly
       std::vector<Eigen::Vector2d> best_lane_points;
       if (params->use_normal_shooting_) {
-          best_lane_points = findNormalShootingCorrespondences(trajectory_points, closest_lane_points);
+            std::vector<std::vector<size_t>> knn_indices = findKClosestNeighborsForPointsKdTree(trajectory_points, 20);
+            best_lane_points = findNormalShootingFromKnn(trajectory_points, knn_indices, lane_points);
+            
       } else {
-          best_lane_points = closest_lane_points;
+          best_lane_points = findClosestLanePoints(pose_history_);
       }
+
 
       // Filter out invalid correspondences (if any)
       std::vector<Eigen::Vector2d> valid_trajectory_points;
       std::vector<Eigen::Vector2d> valid_lane_points;
       
       for (size_t i = 0; i < best_lane_points.size(); ++i) {
-          // Check if the lane point is valid (not NaN or invalid)
-          if (std::isfinite(best_lane_points[i].x()) && std::isfinite(best_lane_points[i].y())) {
+          // Check if the lane point is valid (not NaN, invalid, or no correspondence)
+
+          // Skip points that are NaN or quiet_NaN
+          if (std::isfinite(best_lane_points[i].x()) && std::isfinite(best_lane_points[i].y()) &&
+              !std::isnan(best_lane_points[i].x()) && !std::isnan(best_lane_points[i].y())) {
               valid_trajectory_points.push_back(trajectory_points[i]);
               valid_lane_points.push_back(best_lane_points[i]);
           }
       }
+
       
+        RCLCPP_INFO(nh_->get_logger(), "Found %zu valid correspondences out of %zu trajectory points", 
+                  valid_trajectory_points.size(), trajectory_points.size());
       // Only proceed if we have enough valid correspondences
-      if (valid_trajectory_points.size() < 3) {
+      if (valid_trajectory_points.size() < static_cast<size_t>(0.6 * params->pose_history_size_)) {
           RCLCPP_WARN(nh_->get_logger(), "Not enough valid correspondences for ICP alignment");
           return;
       }
       
-      RCLCPP_INFO(nh_->get_logger(), "Found %zu valid correspondences out of %zu trajectory points", 
-                  valid_trajectory_points.size(), trajectory_points.size());
+  
 
       // Apply 2D ICP using the new solver method
       auto [R_total, t_total, mean_error] = solveIcp2d(valid_trajectory_points, valid_lane_points);
@@ -412,28 +431,35 @@ namespace liodom {
       icp_error /= valid_trajectory_points.size();
 
       RCLCPP_INFO(nh_->get_logger(),"ICP error %f,  orig error %f", icp_error, orig_error );
-      // RCLCPP_INFO(nh_->get_logger(), "Transform matrix:\n[%f %f; %f %f], translation: [%f, %f]", 
-      //     R_total(0,0), R_total(0,1), R_total(1,0), R_total(1,1), t_total.x(), t_total.y());
 
-      if (icp_error < 10.0) {
-          // Apply ICP transformation to current odometry
-          Eigen::Vector2d current_translation(odom_.translation().x(), odom_.translation().y());
-          Eigen::Vector2d new_translation = R_total * current_translation + t_total;
-          
-          // Update odometry translation
-          odom_.translation().x() = new_translation.x();
-          odom_.translation().y() = new_translation.y();
-          
-          // Update prev_odom_ translation as well
-          Eigen::Vector2d prev_translation(prev_odom_.translation().x(), prev_odom_.translation().y());
-          Eigen::Vector2d new_prev_translation = R_total * prev_translation + t_total;
-          prev_odom_.translation().x() = new_prev_translation.x();
-          prev_odom_.translation().y() = new_prev_translation.y();
-          
+      if (icp_error < 1) {
           
           // Update local map with the same transformation
-   
-          pose_history_.clear();
+          // Re-populate pose_history_ with the valid trajectory points, transformed by R_total and t_total
+          std::deque<Eigen::Isometry3d> aux_pose_history;
+        
+          for (size_t i = 10; i < pose_history_.size(); ++i ) {
+              auto aux_pose = pose_history_[i];
+          // Skip points that are NaN or quiet_NaN
+          if (std::isfinite(best_lane_points[i].x()) && std::isfinite(best_lane_points[i].y()) &&
+              !std::isnan(best_lane_points[i].x()) && !std::isnan(best_lane_points[i].y())) {
+                Eigen::Vector2d aux_translation(aux_pose.translation().x(), aux_pose.translation().y());
+                Eigen::Vector2d transformed_translation = R_total * aux_translation + t_total; 
+                aux_pose.translation() = Eigen::Vector3d(transformed_translation.x(), transformed_translation.y(),aux_pose.translation().z());
+                aux_pose_history.push_back(aux_pose);
+              }
+          }
+          pose_history_ = std::move(aux_pose_history);
+          
+                    // Update odometry translation
+          odom_.translation().x() = pose_history_[pose_history_.size()-1].translation().x();
+          odom_.translation().y() = pose_history_[pose_history_.size()-1].translation().y();
+          
+          prev_odom_.translation().x() = pose_history_[pose_history_.size()-2].translation().x();
+          prev_odom_.translation().y() = pose_history_[pose_history_.size()-2].translation().y();
+          
+          // pose_history_.clear();
+
           RCLCPP_INFO(nh_->get_logger(), "Applied ICP transformation to odometry and local map");
     }
   }
@@ -520,6 +546,7 @@ namespace liodom {
 
     return std::make_tuple(R_total, t_total, mean_error);
   }
+
 
   std::vector<Eigen::Vector2d> LaserOdometer::findClosestLanePoints(const std::deque<Eigen::Isometry3d>& pose_history) {
       std::vector<Eigen::Vector2d> best_lane_points(pose_history.size());
@@ -822,6 +849,214 @@ namespace liodom {
 
       tf_broadcaster_->sendTransform(transform);
     }
+  }
+
+  /*
+   * findKClosestNeighborsForPoints - Finds k closest neighbors for each point
+   * 
+   * Returns: std::vector<std::vector<size_t>> where:
+   * - Outer vector has n elements (one for each trajectory point)
+   * - Each inner vector has k elements (k closest map point indices for that trajectory point)
+   * 
+   * Usage example:
+   * std::vector<Eigen::Vector2d> trajectory_points = extractTrajectoryPoints(pose_history);
+   * std::vector<std::vector<size_t>> knn_indices = findKClosestNeighborsForPoints(lane_points, trajectory_points, 3);
+   * // knn_indices[i][j] gives the index of the j-th closest map point for trajectory point i
+   */
+  std::vector<std::vector<size_t>> LaserOdometer::findKClosestNeighborsForPoints(
+    const std::vector<Eigen::Vector2d>& map_points,
+    const std::vector<Eigen::Vector2d>& points,
+    int k) {
+    
+    std::vector<std::vector<size_t>> knn_results(points.size());
+    
+    // For each trajectory point, find k closest map point indices
+    for (size_t i = 0; i < points.size(); ++i) {
+      const Eigen::Vector2d& query_point = points[i];
+      
+      // Calculate distances to all map points
+      std::vector<std::pair<double, size_t>> distances;
+      for (size_t j = 0; j < map_points.size(); ++j) {
+        double dist = (query_point - map_points[j]).norm();
+        distances.emplace_back(dist, j);
+      }
+      
+      // Sort by distance and take the k closest
+      std::sort(distances.begin(), distances.end());
+      int num_neighbors = std::min(k, static_cast<int>(distances.size()));
+      
+      // Store the k closest indices
+      knn_results[i].reserve(num_neighbors);
+      for (int j = 0; j < num_neighbors; ++j) {
+        size_t map_idx = distances[j].second;
+        knn_results[i].push_back(map_idx);
+      }
+    }
+    
+    return knn_results;
+  }
+
+  /*
+   * findKClosestNeighborsForPointsKdTree - Finds k closest neighbors for each point using pre-built PCL KD-tree
+   * Optimized for 2D lane points (z=0 always)
+   * 
+   * Returns: std::vector<std::vector<size_t>> where:
+   * - Outer vector has n elements (one for each trajectory point)
+   * - Each inner vector has k elements (k closest map point indices for that trajectory point)
+   * 
+   * Usage example:
+   * std::vector<Eigen::Vector2d> trajectory_points = extractTrajectoryPoints(pose_history);
+   * std::vector<std::vector<size_t>> knn_indices = findKClosestNeighborsForPointsKdTree(trajectory_points, 3);
+   * // knn_indices[i][j] gives the index of the j-th closest map point for trajectory point i
+   */
+  std::vector<std::vector<size_t>> LaserOdometer::findKClosestNeighborsForPointsKdTree(
+    const std::vector<Eigen::Vector2d>& points,
+    int k) {
+    
+    std::vector<std::vector<size_t>> knn_results(points.size());
+    
+    // For each trajectory point, find k closest map point indices using pre-built KD-tree
+    for (size_t i = 0; i < points.size(); ++i) {
+      const Eigen::Vector2d& query_point = points[i];
+      
+      // Create PCL point for query (2D only, z=0)
+      Point query_pcl_point;
+      query_pcl_point.x = query_point.x();
+      query_pcl_point.y = query_point.y();
+      query_pcl_point.z = 0.0;  // Z is always 0 for 2D lane matching
+      
+      // Find k nearest neighbors using pre-built KD-tree
+      std::vector<int> indices;
+      std::vector<float> sq_distances;
+      lane_kdtree_->nearestKSearch(query_pcl_point, k, indices, sq_distances);
+      
+      // Store the k closest indices
+      knn_results[i].reserve(indices.size());
+      for (size_t j = 0; j < indices.size(); ++j) {
+        knn_results[i].push_back(static_cast<size_t>(indices[j]));
+      }
+    }
+    
+    return knn_results;
+  }
+
+  /*
+   /**
+    * findNormalShootingFromKnn - Improved normal shooting using KNN and map neighbor segments.
+    *
+    * For each trajectory point, iterate over its KNNs. For each KNN, use the map point and its
+    * immediate neighbors in the map to form segments, and check intersection with the normal
+    * projected from the trajectory point. Returns the best intersection or indicates no correspondence.
+    */
+  std::vector<Eigen::Vector2d> LaserOdometer::findNormalShootingFromKnn(
+    const std::vector<Eigen::Vector2d>& trajectory_points,
+    const std::vector<std::vector<size_t>>& knn_indices,
+    const std::vector<Eigen::Vector2d>& map_points) {
+
+    std::vector<Eigen::Vector2d> correspondences(trajectory_points.size());
+
+    for (size_t i = 0; i < trajectory_points.size(); ++i) {
+      const Eigen::Vector2d& p = trajectory_points[i];
+
+      // Estimate tangent direction from trajectory
+      Eigen::Vector2d tangent;
+      if (i > 0 && i < trajectory_points.size() - 1) {
+        tangent = trajectory_points[i + 1] - trajectory_points[i - 1];
+      } else if (i < trajectory_points.size() - 1) {
+        tangent = trajectory_points[i + 1] - p;
+      } else if (i > 0) {
+        tangent = p - trajectory_points[i - 1];
+      } else {
+        tangent = Eigen::Vector2d(1.0, 0.0); // Default direction
+      }
+      tangent.normalize();
+      Eigen::Vector2d normal(-tangent.y(), tangent.x()); // Perpendicular to tangent
+
+      double min_dist = std::numeric_limits<double>::max();
+      Eigen::Vector2d best_point = Eigen::Vector2d::Zero();
+      bool found_valid = false;
+
+      // For each KNN index, try to use its neighbors in the map to form a segment
+      const std::vector<size_t>& knn_idx = knn_indices[i];
+      for (size_t j = 0; j < knn_idx.size(); ++j) {
+        size_t map_idx = knn_idx[j];
+
+        // Try previous neighbor
+        if (map_idx > 0) {
+          const Eigen::Vector2d& a = map_points[map_idx - 1];
+          const Eigen::Vector2d& b = map_points[map_idx];
+          Eigen::Vector2d ab = b - a;
+
+          Eigen::Matrix2d A;
+          A.col(0) = ab;
+          A.col(1) = -normal;
+
+          if (std::abs(A.determinant()) > 1e-10) {
+            Eigen::Vector2d sol = A.inverse() * (p - a);
+            double t = sol(0);
+            double s = sol(1);
+
+            if (t >= 0.0 && t <= 1.0) {
+              double dist = std::abs(s);
+              if (dist < min_dist) {
+                min_dist = dist;
+                Eigen::Vector2d proj = a + t * ab;
+                best_point = proj;
+                found_valid = true;
+              }
+            }
+          }
+        }
+
+        // Try next neighbor
+        if (map_idx + 1 < map_points.size()) {
+          const Eigen::Vector2d& a = map_points[map_idx];
+          const Eigen::Vector2d& b = map_points[map_idx + 1];
+          Eigen::Vector2d ab = b - a;
+
+          Eigen::Matrix2d A;
+          A.col(0) = ab;
+          A.col(1) = -normal;
+
+          if (std::abs(A.determinant()) > 1e-10) {
+            Eigen::Vector2d sol = A.inverse() * (p - a);
+            double t = sol(0);
+            double s = sol(1);
+
+            if (t >= 0.0 && t <= 1.0) {
+              double dist = std::abs(s);
+              if (dist < min_dist) {
+                min_dist = dist;
+                Eigen::Vector2d proj = a + t * ab;
+                best_point = proj;
+                found_valid = true;
+              }
+            }
+          }
+        }
+      }
+
+      if (found_valid) {
+        correspondences[i] = best_point;
+      } else {
+        correspondences[i] = Eigen::Vector2d(std::numeric_limits<double>::quiet_NaN(),
+                                             std::numeric_limits<double>::quiet_NaN());
+      }
+    }
+
+    return correspondences;
+  }
+
+  std::vector<Eigen::Vector2d> LaserOdometer::extractTrajectoryPoints(const std::deque<Eigen::Isometry3d>& pose_history) {
+    std::vector<Eigen::Vector2d> trajectory_points;
+    trajectory_points.reserve(pose_history.size());
+    
+    for (const auto& pose : pose_history) {
+      Eigen::Vector2d point(pose.translation().x(), pose.translation().y());
+      trajectory_points.push_back(point);
+    }
+    
+    return trajectory_points;
   }
 
 }  // namespace liodom
