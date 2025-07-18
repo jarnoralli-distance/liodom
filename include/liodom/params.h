@@ -57,6 +57,8 @@ class Params {
     bool use_icp_optimization_;
     bool use_normal_shooting_;
     int pose_history_size_;
+    int knn_neighbors_;
+    double icp_error_threshold_;
 
     // Methods
     static Params* getInstance();

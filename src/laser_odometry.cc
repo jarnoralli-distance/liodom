@@ -372,7 +372,7 @@ namespace liodom {
       // // Use normal shooting if enabled, otherwise use closest points directly
       std::vector<Eigen::Vector2d> best_lane_points;
       if (params->use_normal_shooting_) {
-            std::vector<std::vector<size_t>> knn_indices = findKClosestNeighborsForPointsKdTree(trajectory_points, 20);
+            std::vector<std::vector<size_t>> knn_indices = findKClosestNeighborsForPointsKdTree(trajectory_points, params->knn_neighbors_);
             best_lane_points = findNormalShootingFromKnn(trajectory_points, knn_indices, lane_points);
             
       } else {
@@ -432,7 +432,7 @@ namespace liodom {
 
       RCLCPP_INFO(nh_->get_logger(),"ICP error %f,  orig error %f", icp_error, orig_error );
 
-      if (icp_error < 1) {
+      if (icp_error < params->icp_error_threshold_) {
           
           // Update local map with the same transformation
           // Re-populate pose_history_ with the valid trajectory points, transformed by R_total and t_total

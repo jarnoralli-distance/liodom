@@ -101,6 +101,12 @@ void Params::declareParams(const rclcpp::Node::SharedPtr& nh) {
   
   // Pose history size for ICP
   nh->declare_parameter("pose_history_size", 50);
+  
+  // KNN neighbors for normal shooting
+  nh->declare_parameter("knn_neighbors", 10);
+  
+  // ICP error threshold
+  nh->declare_parameter("icp_error_threshold", 1.0);
 }
 
 
@@ -203,6 +209,14 @@ void Params::readParams(const rclcpp::Node::SharedPtr& nh) {
   // Pose history size for ICP
   pose_history_size_ = nh->get_parameter("pose_history_size").as_int();
   RCLCPP_INFO(nh->get_logger(), "Pose history size: %i", pose_history_size_);
+  
+  // KNN neighbors for normal shooting
+  knn_neighbors_ = nh->get_parameter("knn_neighbors").as_int();
+  RCLCPP_INFO(nh->get_logger(), "KNN neighbors: %i", knn_neighbors_);
+  
+  // ICP error threshold
+  icp_error_threshold_ = nh->get_parameter("icp_error_threshold").as_double();
+  RCLCPP_INFO(nh->get_logger(), "ICP error threshold: %.2f", icp_error_threshold_);
 }
 
 }  // namespace liodom
