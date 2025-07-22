@@ -103,6 +103,7 @@ namespace liodom {
     tf_buffer_ = std::make_unique<tf2_ros::Buffer>(nh_->get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
+    if(params->use_icp_optimization_ ) {
     //Load lanlet map and projector
     projector_ = std::make_shared<lanelet::projection::UtmProjector>(lanelet::Origin({params->origin_coords_lanelet_[0], params->origin_coords_lanelet_[1]}));
     lanelet_map_= lanelet::load(params->map_lanelet_path_, *projector_);
@@ -123,6 +124,7 @@ namespace liodom {
           Eigen::Vector2d correct_point(point.x(), point.y());
           correct_point = R_M * correct_point;
           lane_points.emplace_back(correct_point.x(), correct_point.y());
+            lane_point_ids.push_back(lanelet.id());
         }
     }
     
@@ -275,23 +277,18 @@ namespace liodom {
             odom_.translation() = Eigen::Vector3d(param_t[0], param_t[1], param_t[2]);
           }      
 
-  
-          if  (pose_history_.size() == params->pose_history_size_)
-                pose_history_.pop_front();
-          // Add current pose to history first
+          if(params->use_icp_optimization_) {
           pose_history_.push_back(odom_);
 
-
           // Only run alignment when pose history reaches full size and ICP optimization is enabled
-          // if (params->use_icp_optimization_ && pose_history_.size() == params->pose_history_size_) {
-          if (params->use_icp_optimization_ && pose_history_.size() == params->pose_history_size_) {
+            if ( pose_history_.size() == params->pose_history_size_) {
             // Store the old translation before any changes
               alignTrajectoryToLane();
               if  (pose_history_.size() > 0)
                 pose_history_.pop_front();
               
+              } 
           } 
-   
         
         // Compute the position of the detectd edges according to the final estimate position
           PointCloud::Ptr edges_map(new PointCloud);
