@@ -140,6 +140,7 @@ namespace liodom {
       lane_cloud_->push_back(pcl_point);
     }
     lane_kdtree_->setInputCloud(lane_cloud_);
+    }
     
   }
 
@@ -370,8 +371,51 @@ namespace liodom {
       std::vector<Eigen::Vector2d> best_lane_points;
       if (params->use_normal_shooting_) {
             std::vector<std::vector<size_t>> knn_indices = findKClosestNeighborsForPointsKdTree(trajectory_points, params->knn_neighbors_);
-            best_lane_points = findNormalShootingFromKnn(trajectory_points, knn_indices, lane_points);
+          std::vector<size_t> best_lane_points_idx = findNormalShootingFromKnn(trajectory_points, knn_indices, lane_points);
             
+          // Find the most common lanelet ids among the correspondences
+          std::vector<lanelet::Id> corresponding_lanelet_ids;
+          std::unordered_map<lanelet::Id, int> id_count;
+          for (size_t idx : best_lane_points_idx) {
+            if (idx < std::numeric_limits<size_t>::max()) {
+                id_count[lane_point_ids[idx]]++;
+                corresponding_lanelet_ids.push_back(lane_point_ids[idx]);
+            }
+          }
+          // Print the contents of the unordered_map id_count
+          RCLCPP_INFO(nh_->get_logger(), "Lanelet ID counts among correspondences:");
+          for (const auto& kv : id_count) {
+            RCLCPP_INFO(nh_->get_logger(), "  Lanelet ID: %ld  Count: %d", static_cast<long>(kv.first), kv.second);
+          }
+
+          // Find the N most common lanelet ids (default N=3)
+          int N = 3;
+          // if (params->has_member("lanelet_majority_N")) {
+          //   N = params->lanelet_majority_N;
+          // }
+          // Create a vector of pairs and sort by count descending
+          std::vector<std::pair<lanelet::Id, int>> id_count_vec(id_count.begin(), id_count.end());
+          std::sort(id_count_vec.begin(), id_count_vec.end(),
+                    [](const std::pair<lanelet::Id, int>& a, const std::pair<lanelet::Id, int>& b) {
+                        return a.second > b.second;
+                    });
+          std::unordered_set<lanelet::Id> most_common_ids;
+          for (int i = 0; i < std::min(N, static_cast<int>(id_count_vec.size())); ++i) {
+            most_common_ids.insert(id_count_vec[i].first);
+          }
+
+          // Filter best_lane_points_idx to only those with the N most common ids
+          std::vector<Eigen::Vector2d> filtered_lane_points;
+          for (size_t i = 0; i < best_lane_points_idx.size(); ++i) {
+            if (best_lane_points_idx[i] == std::numeric_limits<size_t>::max())
+              continue;
+            lanelet::Id curr_id = lane_point_ids[best_lane_points_idx[i]];
+            if (most_common_ids.count(curr_id)) {
+              filtered_lane_points.push_back(lane_points[best_lane_points_idx[i]]);
+            }
+          }
+          // Use filtered_lane_points as best_lane_points for further processing
+          best_lane_points = filtered_lane_points;
       } else {
           best_lane_points = findClosestLanePoints(pose_history_);
       }
@@ -945,12 +989,12 @@ namespace liodom {
     * immediate neighbors in the map to form segments, and check intersection with the normal
     * projected from the trajectory point. Returns the best intersection or indicates no correspondence.
     */
-  std::vector<Eigen::Vector2d> LaserOdometer::findNormalShootingFromKnn(
+  std::vector<size_t> LaserOdometer::findNormalShootingFromKnn(
     const std::vector<Eigen::Vector2d>& trajectory_points,
     const std::vector<std::vector<size_t>>& knn_indices,
     const std::vector<Eigen::Vector2d>& map_points) {
 
-    std::vector<Eigen::Vector2d> correspondences(trajectory_points.size());
+    std::vector<size_t> correspondences(trajectory_points.size());
 
     for (size_t i = 0; i < trajectory_points.size(); ++i) {
       const Eigen::Vector2d& p = trajectory_points[i];
@@ -971,6 +1015,7 @@ namespace liodom {
 
       double min_dist = std::numeric_limits<double>::max();
       Eigen::Vector2d best_point = Eigen::Vector2d::Zero();
+      size_t best_point_idx = std::numeric_limits<size_t>::max();
       bool found_valid = false;
 
       // For each KNN index, try to use its neighbors in the map to form a segment
@@ -999,6 +1044,7 @@ namespace liodom {
                 min_dist = dist;
                 Eigen::Vector2d proj = a + t * ab;
                 best_point = proj;
+                best_point_idx = map_idx;
                 found_valid = true;
               }
             }
@@ -1026,6 +1072,7 @@ namespace liodom {
                 min_dist = dist;
                 Eigen::Vector2d proj = a + t * ab;
                 best_point = proj;
+                best_point_idx = map_idx;
                 found_valid = true;
               }
             }
@@ -1033,12 +1080,8 @@ namespace liodom {
         }
       }
 
-      if (found_valid) {
-        correspondences[i] = best_point;
-      } else {
-        correspondences[i] = Eigen::Vector2d(std::numeric_limits<double>::quiet_NaN(),
-                                             std::numeric_limits<double>::quiet_NaN());
-      }
+      correspondences[i] = best_point_idx;
+
     }
 
     return correspondences;

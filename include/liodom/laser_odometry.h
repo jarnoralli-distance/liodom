@@ -135,9 +135,9 @@ class LaserOdometer {
   int num_freqs_;
   double last_in_time_secs_;
   double last_out_time_secs_;
-  lanelet::Id current_lanelet_id_;
   std::deque<Eigen::Isometry3d> pose_history_;
   std::vector<Eigen::Vector2d> lane_points;
+  std::vector<lanelet::Id> lane_point_ids;
   pcl::KdTreeFLANN<Point>::Ptr lane_kdtree_;
   PointCloud::Ptr lane_cloud_;
 
@@ -186,14 +186,32 @@ class LaserOdometer {
     const std::vector<Eigen::Vector2d>& points,
     int k = 3);
   
-  // Normal shooting from KNN correspondences
-  std::vector<Eigen::Vector2d> findNormalShootingFromKnn(
+  // Normal shooting from KNN correspondences - returns indices
+  std::vector<size_t> findNormalShootingFromKnn(
     const std::vector<Eigen::Vector2d>& trajectory_points,
     const std::vector<std::vector<size_t>>& knn_indices,
     const std::vector<Eigen::Vector2d>& map_points);
   
   // Helper method to extract trajectory points from pose history
   std::vector<Eigen::Vector2d> extractTrajectoryPoints(const std::deque<Eigen::Isometry3d>& pose_history);
+  
+  // Filter lane points based on most common lanelet IDs
+  std::vector<Eigen::Vector2d> filterLanePointsByLaneletIds(
+    const std::vector<Eigen::Vector2d>& lane_points,
+    const std::vector<lanelet::Id>& lanelet_ids);
+  
+  // Find closest lane points with lanelet IDs
+  std::pair<std::vector<Eigen::Vector2d>, std::vector<lanelet::Id>> findClosestLanePointsWithIds(
+    const std::deque<Eigen::Isometry3d>& pose_history);
+  
+  // Normal shooting from KNN with lanelet IDs
+  std::pair<std::vector<Eigen::Vector2d>, std::vector<lanelet::Id>> findNormalShootingFromKnnWithIds(
+    const std::vector<Eigen::Vector2d>& trajectory_points,
+    const std::vector<std::vector<size_t>>& knn_indices,
+    const std::vector<Eigen::Vector2d>& map_points);
+  
+  // Get lanelet IDs for given lane point indices
+  std::vector<lanelet::Id> getLaneletIdsForIndices(const std::vector<size_t>& indices);
 };
 
 }  // namespace liodom
