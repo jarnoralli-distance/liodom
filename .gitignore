@@ -61,3 +61,4 @@ note.txt
 *.py
 *._pycache_
 *.pyc
+*.ipynb
