@@ -102,7 +102,14 @@ int main(int argc, char** argv) {
   stats = liodom::Stats::getInstance();
 
   // Subscribers  
-  auto pc_subs_ = node->create_subscription<sensor_msgs::msg::PointCloud2>("points", 1, lidarClb);
+  // auto pc_subs_ = node->create_subscription<sensor_msgs::msg::PointCloud2>("points", 1, lidarClb);
+  rclcpp::QoS qos_profile(rclcpp::KeepLast(10));
+  qos_profile.reliability(RMW_QOS_POLICY_RELIABILITY_RELIABLE);
+  qos_profile.durability(RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL);
+
+  auto pc_subs_ = node->create_subscription<sensor_msgs::msg::PointCloud2>(
+      "points", qos_profile, lidarClb);
+
   auto map_subs_ = node->create_subscription<sensor_msgs::msg::PointCloud2>("map", 1, mapClb);
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_subs_;
   if (params->use_imu_) {
