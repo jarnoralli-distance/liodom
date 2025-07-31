@@ -104,42 +104,41 @@ namespace liodom {
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
     if(params->use_icp_optimization_ ) {
-    //Load lanlet map and projector
-    projector_ = std::make_shared<lanelet::projection::UtmProjector>(lanelet::Origin({params->origin_coords_lanelet_[0], params->origin_coords_lanelet_[1]}));
-    lanelet_map_= lanelet::load(params->map_lanelet_path_, *projector_);
+      //Load lanlet map and projector
+      projector_ = std::make_shared<lanelet::projection::UtmProjector>(lanelet::Origin({params->origin_coords_lanelet_[0], params->origin_coords_lanelet_[1]}));
+      lanelet_map_= lanelet::load(params->map_lanelet_path_, *projector_);
 
-      // Define rotation matrix (same as before)
-    double rotation_angle = params->angle_lanelet_correction_ * (M_PI / 180.0);
-    double cos_angle = std::cos(rotation_angle);
-    double sin_angle = std::sin(rotation_angle);
+        // Define rotation matrix (same as before)
+      double rotation_angle = params->angle_lanelet_correction_ * (M_PI / 180.0);
+      double cos_angle = std::cos(rotation_angle);
+      double sin_angle = std::sin(rotation_angle);
 
-    Eigen::Matrix2d R_M;
-    R_M << cos_angle, -sin_angle,
-            sin_angle, cos_angle;
+      Eigen::Matrix2d R_M;
+      R_M << cos_angle, -sin_angle,
+              sin_angle, cos_angle;
 
-    // Gather all lanelet centerline points into a vector
-    for (const auto& lanelet : lanelet_map_->laneletLayer) {
-        auto centerline = lanelet.centerline();
-        for (const auto& point : centerline) {
-          Eigen::Vector2d correct_point(point.x(), point.y());
-          correct_point = R_M * correct_point;
-          lane_points.emplace_back(correct_point.x(), correct_point.y());
-            lane_point_ids.push_back(lanelet.id());
-        }
-    }
-    
-    // Build KD-tree for lane points (2D only, z=0)
-    lane_kdtree_ = std::make_shared<pcl::KdTreeFLANN<Point>>();
-    lane_cloud_ = std::make_shared<PointCloud>();
-    lane_cloud_->reserve(lane_points.size());
-    for (const auto& point : lane_points) {
-      Point pcl_point;
-      pcl_point.x = point.x();
-      pcl_point.y = point.y();
-      pcl_point.z = 0.0;  // Z is always 0 for 2D lane points
-      lane_cloud_->push_back(pcl_point);
-    }
-    lane_kdtree_->setInputCloud(lane_cloud_);
+      // Gather all lanelet centerline points into a vector
+      for (const auto& lanelet : lanelet_map_->laneletLayer) {
+          auto centerline = lanelet.centerline();
+          for (const auto& point : centerline) {
+            Eigen::Vector2d correct_point(point.x(), point.y());
+            correct_point = R_M * correct_point;
+            lane_points.emplace_back(correct_point.x(), correct_point.y());
+          }
+      }
+      
+      // Build KD-tree for lane points (2D only, z=0)
+      lane_kdtree_ = std::make_shared<pcl::KdTreeFLANN<Point>>();
+      lane_cloud_ = std::make_shared<PointCloud>();
+      lane_cloud_->reserve(lane_points.size());
+      for (const auto& point : lane_points) {
+        Point pcl_point;
+        pcl_point.x = point.x();
+        pcl_point.y = point.y();
+        pcl_point.z = 0.0;  // Z is always 0 for 2D lane points
+        lane_cloud_->push_back(pcl_point);
+      }
+      lane_kdtree_->setInputCloud(lane_cloud_);
     }
     
   }
@@ -371,51 +370,11 @@ namespace liodom {
       std::vector<Eigen::Vector2d> best_lane_points;
       if (params->use_normal_shooting_) {
             std::vector<std::vector<size_t>> knn_indices = findKClosestNeighborsForPointsKdTree(trajectory_points, params->knn_neighbors_);
-          std::vector<size_t> best_lane_points_idx = findNormalShootingFromKnn(trajectory_points, knn_indices, lane_points);
+          std::vector<Eigen::Vector2d> intercept_points = findNormalShootingFromKnn(trajectory_points, knn_indices, lane_points);
             
-          // Find the most common lanelet ids among the correspondences
-          std::vector<lanelet::Id> corresponding_lanelet_ids;
-          std::unordered_map<lanelet::Id, int> id_count;
-          for (size_t idx : best_lane_points_idx) {
-            if (idx < std::numeric_limits<size_t>::max()) {
-                id_count[lane_point_ids[idx]]++;
-                corresponding_lanelet_ids.push_back(lane_point_ids[idx]);
-            }
-          }
-          // Print the contents of the unordered_map id_count
-          RCLCPP_INFO(nh_->get_logger(), "Lanelet ID counts among correspondences:");
-          for (const auto& kv : id_count) {
-            RCLCPP_INFO(nh_->get_logger(), "  Lanelet ID: %ld  Count: %d", static_cast<long>(kv.first), kv.second);
-          }
 
-          // Find the N most common lanelet ids (default N=3)
-          int N = 3;
-          // if (params->has_member("lanelet_majority_N")) {
-          //   N = params->lanelet_majority_N;
-          // }
-          // Create a vector of pairs and sort by count descending
-          std::vector<std::pair<lanelet::Id, int>> id_count_vec(id_count.begin(), id_count.end());
-          std::sort(id_count_vec.begin(), id_count_vec.end(),
-                    [](const std::pair<lanelet::Id, int>& a, const std::pair<lanelet::Id, int>& b) {
-                        return a.second > b.second;
-                    });
-          std::unordered_set<lanelet::Id> most_common_ids;
-          for (int i = 0; i < std::min(N, static_cast<int>(id_count_vec.size())); ++i) {
-            most_common_ids.insert(id_count_vec[i].first);
-          }
-
-          // Filter best_lane_points_idx to only those with the N most common ids
-          std::vector<Eigen::Vector2d> filtered_lane_points;
-          for (size_t i = 0; i < best_lane_points_idx.size(); ++i) {
-            if (best_lane_points_idx[i] == std::numeric_limits<size_t>::max())
-              continue;
-            lanelet::Id curr_id = lane_point_ids[best_lane_points_idx[i]];
-            if (most_common_ids.count(curr_id)) {
-              filtered_lane_points.push_back(lane_points[best_lane_points_idx[i]]);
-            }
-          }
-          // Use filtered_lane_points as best_lane_points for further processing
-          best_lane_points = filtered_lane_points;
+          // Use intercept_points as best_lane_points for further processing
+          best_lane_points = intercept_points;
       } else {
           best_lane_points = findClosestLanePoints(pose_history_);
       }
@@ -448,7 +407,7 @@ namespace liodom {
   
 
       // Apply 2D ICP using the new solver method
-      auto [R_total, t_total, mean_error] = solveIcp2d(valid_trajectory_points, valid_lane_points);
+      auto [R_total, t_total, mean_error] = solveTrimmedIcp2d(valid_trajectory_points, valid_lane_points);
 
 
       // Calculate average distance from original traj to closest point in lane_points (original error)
@@ -479,7 +438,7 @@ namespace liodom {
           // Re-populate pose_history_ with the valid trajectory points, transformed by R_total and t_total
           std::deque<Eigen::Isometry3d> aux_pose_history;
         
-          for (size_t i = 10; i < pose_history_.size(); ++i ) {
+          for (size_t i = 0; i < pose_history_.size(); ++i ) {
               auto aux_pose = pose_history_[i];
           // Skip points that are NaN or quiet_NaN
           if (std::isfinite(best_lane_points[i].x()) && std::isfinite(best_lane_points[i].y()) &&
@@ -495,12 +454,12 @@ namespace liodom {
                     // Update odometry translation
           odom_.translation().x() = pose_history_[pose_history_.size()-1].translation().x();
           odom_.translation().y() = pose_history_[pose_history_.size()-1].translation().y();
-          
+
           prev_odom_.translation().x() = pose_history_[pose_history_.size()-2].translation().x();
           prev_odom_.translation().y() = pose_history_[pose_history_.size()-2].translation().y();
           
           // pose_history_.clear();
-
+  
           RCLCPP_INFO(nh_->get_logger(), "Applied ICP transformation to odometry and local map");
     }
   }
@@ -578,6 +537,114 @@ namespace liodom {
             mean_error += (src_points[i] - tgt_points[i]).norm();
         }
         mean_error /= static_cast<double>(N);
+
+        if (std::abs(prev_error - mean_error) < tolerance) {
+            break;
+        }
+        prev_error = mean_error;
+    }
+
+    return std::make_tuple(R_total, t_total, mean_error);
+  }
+
+  std::tuple<Eigen::Matrix2d, Eigen::Vector2d, double> LaserOdometer::solveTrimmedIcp2d(
+      const std::vector<Eigen::Vector2d>& source_points,
+      const std::vector<Eigen::Vector2d>& target_points,
+      double trimming_ratio,
+      int max_iterations,
+      double tolerance) {
+    
+    std::vector<Eigen::Vector2d> src_points = source_points;
+    std::vector<Eigen::Vector2d> tgt_points = target_points;
+
+    // ICP parameters
+    double prev_error = std::numeric_limits<double>::max();
+    size_t N = src_points.size();
+    size_t N_trimmed = static_cast<size_t>(N * (1.0 - trimming_ratio));
+
+    // Initialize transformation
+    Eigen::Matrix2d R_total = Eigen::Matrix2d::Identity();
+    Eigen::Vector2d t_total = Eigen::Vector2d::Zero();
+    double mean_error = 0.0;
+
+    for (int iter = 0; iter < max_iterations; ++iter) {
+        // Compute distances and sort to find best correspondences
+        std::vector<std::pair<double, size_t>> distances;
+        distances.reserve(N);
+        
+        for (size_t i = 0; i < N; ++i) {
+            double dist = (src_points[i] - tgt_points[i]).norm();
+            distances.emplace_back(dist, i);
+        }
+        
+        // Sort by distance and keep only the best correspondences
+        std::sort(distances.begin(), distances.end());
+        
+        // Use only the best N_trimmed correspondences
+        std::vector<Eigen::Vector2d> src_trimmed, tgt_trimmed;
+        src_trimmed.reserve(N_trimmed);
+        tgt_trimmed.reserve(N_trimmed);
+        
+        for (size_t i = 0; i < N_trimmed; ++i) {
+            size_t idx = distances[i].second;
+            src_trimmed.push_back(src_points[idx]);
+            tgt_trimmed.push_back(tgt_points[idx]);
+        }
+
+        // Compute centroids using trimmed points
+        Eigen::Vector2d centroid_src = Eigen::Vector2d::Zero();
+        Eigen::Vector2d centroid_tgt = Eigen::Vector2d::Zero();
+        for (size_t i = 0; i < N_trimmed; ++i) {
+            centroid_src += src_trimmed[i];
+            centroid_tgt += tgt_trimmed[i];
+        }
+        centroid_src /= static_cast<double>(N_trimmed);
+        centroid_tgt /= static_cast<double>(N_trimmed);
+
+        // Center the trimmed points
+        std::vector<Eigen::Vector2d> src_centered(N_trimmed), tgt_centered(N_trimmed);
+        for (size_t i = 0; i < N_trimmed; ++i) {
+            src_centered[i] = src_trimmed[i] - centroid_src;
+            tgt_centered[i] = tgt_trimmed[i] - centroid_tgt;
+        }
+
+        // Compute cross-covariance
+        Eigen::Matrix2d W = Eigen::Matrix2d::Zero();
+        for (size_t i = 0; i < N_trimmed; ++i) {
+            W += src_centered[i] * tgt_centered[i].transpose();
+        }
+
+        // SVD for optimal rotation
+        Eigen::JacobiSVD<Eigen::Matrix2d> svd(W, Eigen::ComputeFullU | Eigen::ComputeFullV);
+        Eigen::Matrix2d U = svd.matrixU();
+        Eigen::Matrix2d V = svd.matrixV();
+        Eigen::Matrix2d R = V * U.transpose();
+
+        // Ensure proper rotation (determinant = 1)
+        if (R.determinant() < 0) {
+            V.col(1) *= -1;
+            R = V * U.transpose();
+        }
+        
+        // Compute translation
+        Eigen::Vector2d t = centroid_tgt - R * centroid_src;
+
+        // Update cumulative transformation
+        R_total = R * R_total;
+        t_total = R * t_total + t;
+
+        // Apply transformation to all src_points for next iteration
+        for (size_t i = 0; i < N; ++i) {
+            src_points[i] = R * src_points[i] + t;
+        }
+
+        // Compute mean error using trimmed points
+        mean_error = 0.0;
+        for (size_t i = 0; i < N_trimmed; ++i) {
+            size_t idx = distances[i].second;
+            mean_error += (src_points[idx] - tgt_points[idx]).norm();
+        }
+        mean_error /= static_cast<double>(N_trimmed);
 
         if (std::abs(prev_error - mean_error) < tolerance) {
             break;
@@ -989,12 +1056,12 @@ namespace liodom {
     * immediate neighbors in the map to form segments, and check intersection with the normal
     * projected from the trajectory point. Returns the best intersection or indicates no correspondence.
     */
-  std::vector<size_t> LaserOdometer::findNormalShootingFromKnn(
+  std::vector<Eigen::Vector2d> LaserOdometer::findNormalShootingFromKnn(
     const std::vector<Eigen::Vector2d>& trajectory_points,
     const std::vector<std::vector<size_t>>& knn_indices,
     const std::vector<Eigen::Vector2d>& map_points) {
 
-    std::vector<size_t> correspondences(trajectory_points.size());
+    std::vector<Eigen::Vector2d> intercept_points(trajectory_points.size());
 
     for (size_t i = 0; i < trajectory_points.size(); ++i) {
       const Eigen::Vector2d& p = trajectory_points[i];
@@ -1014,8 +1081,7 @@ namespace liodom {
       Eigen::Vector2d normal(-tangent.y(), tangent.x()); // Perpendicular to tangent
 
       double min_dist = std::numeric_limits<double>::max();
-      Eigen::Vector2d best_point = Eigen::Vector2d::Zero();
-      size_t best_point_idx = std::numeric_limits<size_t>::max();
+      Eigen::Vector2d best_intercept_point = Eigen::Vector2d::Zero();
       bool found_valid = false;
 
       // For each KNN index, try to use its neighbors in the map to form a segment
@@ -1043,8 +1109,7 @@ namespace liodom {
               if (dist < min_dist) {
                 min_dist = dist;
                 Eigen::Vector2d proj = a + t * ab;
-                best_point = proj;
-                best_point_idx = map_idx;
+                best_intercept_point = proj;
                 found_valid = true;
               }
             }
@@ -1071,8 +1136,7 @@ namespace liodom {
               if (dist < min_dist) {
                 min_dist = dist;
                 Eigen::Vector2d proj = a + t * ab;
-                best_point = proj;
-                best_point_idx = map_idx;
+                best_intercept_point = proj;
                 found_valid = true;
               }
             }
@@ -1080,11 +1144,11 @@ namespace liodom {
         }
       }
 
-      correspondences[i] = best_point_idx;
+      intercept_points[i] = best_intercept_point;
 
     }
 
-    return correspondences;
+    return intercept_points;
   }
 
   std::vector<Eigen::Vector2d> LaserOdometer::extractTrajectoryPoints(const std::deque<Eigen::Isometry3d>& pose_history) {

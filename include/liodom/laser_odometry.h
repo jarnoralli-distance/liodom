@@ -137,7 +137,6 @@ class LaserOdometer {
   double last_out_time_secs_;
   std::deque<Eigen::Isometry3d> pose_history_;
   std::vector<Eigen::Vector2d> lane_points;
-  std::vector<lanelet::Id> lane_point_ids;
   pcl::KdTreeFLANN<Point>::Ptr lane_kdtree_;
   PointCloud::Ptr lane_cloud_;
 
@@ -168,6 +167,14 @@ class LaserOdometer {
     int max_iterations = 50,
     double tolerance = 1e-6);
   
+  // Trimmed ICP solver method - robust to outliers by trimming worst correspondences
+  std::tuple<Eigen::Matrix2d, Eigen::Vector2d, double> solveTrimmedIcp2d(
+    const std::vector<Eigen::Vector2d>& source_points,
+    const std::vector<Eigen::Vector2d>& target_points,
+    double trimming_ratio = 0.1,
+    int max_iterations = 50,
+    double tolerance = 1e-6);
+  
   // Geometric pose correction method - finds intersection of perpendicular lines
   Eigen::Vector2d findGeometricIntersection(const Eigen::Vector2d& pn_minus_1, 
                                            const Eigen::Vector2d& pn, 
@@ -186,8 +193,8 @@ class LaserOdometer {
     const std::vector<Eigen::Vector2d>& points,
     int k = 3);
   
-  // Normal shooting from KNN correspondences - returns indices
-  std::vector<size_t> findNormalShootingFromKnn(
+  // Normal shooting from KNN correspondences - returns intercept points
+  std::vector<Eigen::Vector2d> findNormalShootingFromKnn(
     const std::vector<Eigen::Vector2d>& trajectory_points,
     const std::vector<std::vector<size_t>>& knn_indices,
     const std::vector<Eigen::Vector2d>& map_points);
