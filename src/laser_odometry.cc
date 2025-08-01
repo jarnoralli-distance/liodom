@@ -407,7 +407,8 @@ namespace liodom {
   
 
       // Apply 2D ICP using the new solver method
-      auto [R_total, t_total, mean_error] = solveTrimmedIcp2d(valid_trajectory_points, valid_lane_points);
+
+      auto [R_total, t_total, icp_error_] = solveTrimmedIcp2d(valid_trajectory_points, valid_lane_points);
 
 
       // Calculate average distance from original traj to closest point in lane_points (original error)
@@ -420,19 +421,10 @@ namespace liodom {
       }
       orig_error /= valid_trajectory_points.size();
 
-      // Calculate average distance from transformed traj to closest point in lane_points (ICP error)
-      double icp_error = 0.0;
-      for (int i = 0; i < valid_trajectory_points.size(); i++) {
-        Eigen::Vector2d transformed_point = R_total * valid_trajectory_points[i] + t_total;
-        Eigen::Vector2d lane_point = valid_lane_points[i];
-        double d = (transformed_point - lane_point).norm();
-        icp_error += d;
-      }
-      icp_error /= valid_trajectory_points.size();
 
-      RCLCPP_INFO(nh_->get_logger(),"ICP error %f,  orig error %f", icp_error, orig_error );
+      RCLCPP_INFO(nh_->get_logger(),"ICP error %f,  orig error %f", icp_error_, orig_error );
 
-      if (icp_error < params->icp_error_threshold_) {
+      if (icp_error_ < params->icp_error_threshold_) {
           
           // Update local map with the same transformation
           // Re-populate pose_history_ with the valid trajectory points, transformed by R_total and t_total
@@ -566,6 +558,7 @@ namespace liodom {
     Eigen::Matrix2d R_total = Eigen::Matrix2d::Identity();
     Eigen::Vector2d t_total = Eigen::Vector2d::Zero();
     double mean_error = 0.0;
+    std::vector<size_t> best_indices; // Store indices of best correspondences
 
     for (int iter = 0; iter < max_iterations; ++iter) {
         // Compute distances and sort to find best correspondences
@@ -580,6 +573,10 @@ namespace liodom {
         // Sort by distance and keep only the best correspondences
         std::sort(distances.begin(), distances.end());
         
+        // Store the best indices for final error calculation
+        best_indices.clear();
+        best_indices.reserve(N_trimmed);
+        
         // Use only the best N_trimmed correspondences
         std::vector<Eigen::Vector2d> src_trimmed, tgt_trimmed;
         src_trimmed.reserve(N_trimmed);
@@ -587,6 +584,7 @@ namespace liodom {
         
         for (size_t i = 0; i < N_trimmed; ++i) {
             size_t idx = distances[i].second;
+            best_indices.push_back(idx);
             src_trimmed.push_back(src_points[idx]);
             tgt_trimmed.push_back(tgt_points[idx]);
         }
@@ -652,7 +650,18 @@ namespace liodom {
         prev_error = mean_error;
     }
 
-    return std::make_tuple(R_total, t_total, mean_error);
+    // Calculate final icp_error using only the non-trimmed points (best correspondences)
+    double icp_error = 0.0;
+    for (size_t i = 0; i < best_indices.size(); ++i) {
+        size_t idx = best_indices[i];
+        Eigen::Vector2d transformed_point = R_total * source_points[idx] + t_total;
+        Eigen::Vector2d target_point = target_points[idx];
+        double d = (transformed_point - target_point).norm();
+        icp_error += d;
+    }
+    icp_error /= static_cast<double>(best_indices.size());
+
+    return std::make_tuple(R_total, t_total, icp_error);
   }
 
 
