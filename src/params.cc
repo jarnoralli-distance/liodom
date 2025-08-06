@@ -107,6 +107,9 @@ void Params::declareParams(const rclcpp::Node::SharedPtr& nh) {
   
   // ICP error threshold
   nh->declare_parameter("icp_error_threshold", 1.0);
+  
+  // Valid correspondence threshold (percentage)
+  nh->declare_parameter("valid_correspondence_threshold", 0.6);
 }
 
 
@@ -217,6 +220,10 @@ void Params::readParams(const rclcpp::Node::SharedPtr& nh) {
   // ICP error threshold
   icp_error_threshold_ = nh->get_parameter("icp_error_threshold").as_double();
   RCLCPP_INFO(nh->get_logger(), "ICP error threshold: %.2f", icp_error_threshold_);
+  
+  // Valid correspondence threshold (percentage)
+  valid_correspondence_threshold_ = nh->get_parameter("valid_correspondence_threshold").as_double();
+  RCLCPP_INFO(nh->get_logger(), "Valid correspondence threshold: %.2f", valid_correspondence_threshold_);
 }
 
 }  // namespace liodom

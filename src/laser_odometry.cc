@@ -399,7 +399,7 @@ namespace liodom {
         RCLCPP_INFO(nh_->get_logger(), "Found %zu valid correspondences out of %zu trajectory points", 
                   valid_trajectory_points.size(), trajectory_points.size());
       // Only proceed if we have enough valid correspondences
-      if (valid_trajectory_points.size() < static_cast<size_t>(0.6 * params->pose_history_size_)) {
+      if (valid_trajectory_points.size() < static_cast<size_t>(params->valid_correspondence_threshold_ * params->pose_history_size_)) {
           RCLCPP_WARN(nh_->get_logger(), "Not enough valid correspondences for ICP alignment");
           return;
       }

@@ -59,6 +59,7 @@ class Params {
     int pose_history_size_;
     int knn_neighbors_;
     double icp_error_threshold_;
+    double valid_correspondence_threshold_;
 
     // Methods
     static Params* getInstance();
