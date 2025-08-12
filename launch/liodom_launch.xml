@@ -1,7 +1,27 @@
 <launch>
+  <!-- Frame parameters -->
+  <arg name="viz" default="false" />
+  <arg name="mapping" default="false" />
+  <arg name="frame_id" default="01" />
+  <arg name="origin_coords_lanelet_lat" default="48.97253396005" />
+  <arg name="origin_coords_lanelet_lon" default="8.4785980847297" />
+  <arg name="angle_lanelet_correction" default="16.0" />
+
   
-  <arg name="viz" default="true" />
-  <arg name="mapping" default="true" />
+  <!-- Lanet parameters -->
+  <arg name="type" default="liodom" />
+  <arg name="pose_history_size" default="1" />
+  <arg name="use_icp_optimization" default="false" />
+  <arg name="use_normal_shooting" default="true" />
+  <arg name="icp_error_threshold" default="1.0" />
+  <arg name="knn_neighbors" default="50" />
+  <arg name="valid_correspondence_threshold" default="0.6" />
+
+  <!-- Liodom parameters -->
+  <arg name="scan_regions" default="8" />
+  <arg name="edges_per_region" default="10" />
+
+
 
   <!-- Liodom -->
   <node pkg="liodom"
@@ -15,15 +35,15 @@
     <param name="max_range" value="75.0" />
     <param name="lidar_type" value="0" />
     <param name="scan_lines" value="64" />
-    <param name="scan_regions" value="8" />
-    <param name="edges_per_region" value="10" />
+    <param name="scan_regions" value="$(var scan_regions)" />
+    <param name="edges_per_region" value="$(var edges_per_region)" />
     <param name="prev_frames" value="15" />
     <param name="fixed_frame" value="odom" />
     <param name="base_frame" value="base_link" />
     <param name="laser_frame" value="velo_link" />
-    <param name="use_imu" value="true" />
-    <param name="save_results" value="false" />    
-    <param name="save_results_dir" value="/home/joaquinecc/Documents/ros_projects/results/liodom/02/" />
+    <param name="use_imu" value="false" />
+    <param name="save_results" value="true" />    
+    <param name="save_results_dir" value="/home/joaquinecc/Documents/ros_projects/results/$(var type)/$(var frame_id)/" />
     <param name="mapping" value="$(var mapping)" />
     <param name="publish_tf" value="false" />
     <param name="use_sim_time" value="true"/>
@@ -32,22 +52,19 @@
     <remap from="imu" to="/kitti/oxts/imu" />
     <remap from="map" to="/liodom_mapper/map_local" />
 
-    <!-- Lanelet parameters -->
-    <!-- <param name="map_lanelet_path" value="/home/joaquinecc/Documents/dataset/kitti/dataset/map/02/lanelet2_seq_02.osm"/>
-    <param name="origin_coords_lanelet_lat" value="48.987607723096"/>
-    <param name="origin_coords_lanelet_lon" value="8.4697469732634"/>
-    <param name="angle_lanelet_correction" value="-53.5"/> -->
-
-    <param name="map_lanelet_path" value="/home/joaquinecc/Documents/dataset/kitti/dataset/map/00/lanelet2_seq_00.osm"/>
-    <param name="origin_coords_lanelet_lat" value="48.98254523586602"/>
-    <param name="origin_coords_lanelet_lon" value="8.39036610004500"/>
-    <param name="angle_lanelet_correction" value="-59.0"/>
-    
     <!-- ICP optimization parameters -->
-    <param name="use_icp_optimization" value="true" />
-    <param name="use_normal_shooting" value="true" />
-    <param name="pose_history_size" value="50" />
-
+    <param name="use_icp_optimization" value="$(var use_icp_optimization)" />
+    <param name="use_normal_shooting" value="$(var use_normal_shooting)" />
+    <param name="pose_history_size" value="$(var pose_history_size)" />
+    <param name="knn_neighbors" value="$(var knn_neighbors)" />
+    <param name="icp_error_threshold" value="$(var icp_error_threshold)" />
+    <param name="valid_correspondence_threshold" value="$(var valid_correspondence_threshold)" />
+    <!-- Lanelet parameters -->
+    <param name="map_lanelet_path" value="/home/joaquinecc/Documents/dataset/kitti/dataset/map/$(var frame_id)/lanelet2_seq_$(var frame_id).osm"/>
+    
+    <param name="origin_coords_lanelet_lat" value="$(var origin_coords_lanelet_lat)"/>
+    <param name="origin_coords_lanelet_lon" value="$(var origin_coords_lanelet_lon)"/>
+    <param name="angle_lanelet_correction" value="$(var angle_lanelet_correction)"/>
 
   </node>
 
@@ -74,20 +91,6 @@
     </node>
   </group>
 
- <!-- <node pkg="tf2_ros"
-        exec="static_transform_publisher"
-	      name="world2odom"
-	      args="0 0 0 0 0 0 camera_gray_left odom" >
-        <param name="use_sim_time" value="true"/>
-  </node> -->
-  <!--
-true
-  <node pkg="tf2_ros"
-        exec="static_transform_publisher"
-	      name="baselink2laser"
-	      args="0 0 0 0 0 0 base_link velo_link" >
-        <param name="use_sim_time" value="true"/>
-  </node> -->
 
   <group if="$(var viz)">
     <node exec="rviz2" name="rviz2" pkg="rviz2" args="-d $(find-pkg-share liodom)/rviz/liodom.rviz">
