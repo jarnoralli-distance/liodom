@@ -21,7 +21,7 @@
     <param name="fixed_frame" value="odom" />
     <param name="base_frame" value="base_link" />
     <param name="laser_frame" value="velo_link" />
-    <param name="use_imu" value="true" />
+    <param name="use_imu" value="false" />
     <param name="save_results" value="true" />    
     <param name="save_results_dir" value="/home/joaquinecc/Documents/ros_projects/results/" />
     <param name="mapping" value="$(var mapping)" />

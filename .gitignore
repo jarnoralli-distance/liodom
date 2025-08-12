@@ -57,4 +57,9 @@ config/logging.conf
 # Ignore generated .launch files
 *.launch
 temp.*
+temp/*
 note.txt
+*.pyc
+*.ipynb
+*.ipynb_checkpoints
+*.ipynb_checkpoints/*
