@@ -90,12 +90,12 @@ int main(int argc, char** argv) {
 
   // // Creating threads
   liodom::FeatureExtractor fext(node);
-  liodom::LaserOdometer lodom(node);
+  liodom::LaserOdometer* lodom = new liodom::LaserOdometer(node);
 
   // // Launching threads
   std::atomic<bool> running {true};
   std::thread fext_thread(fext, std::ref(running));
-  std::thread lodom_thread(lodom, std::ref(running));
+  std::thread lodom_thread(std::ref(*lodom), std::ref(running));
 
   // // Shared stuff
   sdata = liodom::SharedData::getInstance();
@@ -122,6 +122,7 @@ int main(int argc, char** argv) {
   running = false;
   fext_thread.join();
   lodom_thread.join();
+  delete lodom;
 
   // Saving results if required
   if (params->save_results_) {

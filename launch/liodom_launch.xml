@@ -23,13 +23,13 @@
     <param name="laser_frame" value="velo_link" />
     <param name="use_imu" value="false" />
     <param name="save_results" value="true" />    
-    <param name="save_results_dir" value="/home/joaquinecc/Documents/ros_projects/results/" />
+    <param name="save_results_dir" value="/home/joaquinecc/Documents/ros_projects/results/temp/" />
     <param name="mapping" value="$(var mapping)" />
-    <param name="publish_tf" value="true" />
+    <param name="publish_tf" value="false" />
     <param name="use_sim_time" value="true"/>
     
     <remap from="points" to="/kitti/velo/pointcloud" />
-<remap from="imu" to="/kitti/oxts/imu" />
+    <remap from="imu" to="/kitti/oxts/imu" />
     <remap from="map" to="/liodom_mapper/map_local" />
 
   </node>

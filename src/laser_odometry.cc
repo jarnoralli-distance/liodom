@@ -18,6 +18,8 @@
 */
 
 #include <liodom/laser_odometry.h>
+#include <liodom/srv/transform_correction.hpp>
+#include <functional>
 
 namespace liodom {
 
@@ -73,6 +75,8 @@ LaserOdometer::LaserOdometer(const rclcpp::Node::SharedPtr& nh) :
   init_(false),
   prev_odom_(Eigen::Isometry3d::Identity()),
   odom_(Eigen::Isometry3d::Identity()),
+  correction_offset_(Eigen::Isometry3d::Identity()),
+  correction_pending_(false),
   prev_stamp_(0.0),
   sdata(SharedData::getInstance()),
   stats(Stats::getInstance()),
@@ -92,6 +96,11 @@ LaserOdometer::LaserOdometer(const rclcpp::Node::SharedPtr& nh) :
   // Publishers
   odom_pub_ = nh_->create_publisher<nav_msgs::msg::Odometry>("odom", 10);
   twist_pub_ = nh_->create_publisher<geometry_msgs::msg::TwistStamped>("twist", 10);
+
+  // Service
+  correction_service_ = nh_->create_service<liodom::srv::TransformCorrection>(
+    "transform_correction", 
+    std::bind(&LaserOdometer::handleTransformCorrection, this, std::placeholders::_1, std::placeholders::_2));
 
   // TF broadcaster
   tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(nh_);
@@ -150,6 +159,9 @@ void LaserOdometer::operator()(std::atomic<bool>& running) {
         PointCloud::Ptr local_map_rec(new PointCloud);
         PointCloud::Ptr local_map_gen(new PointCloud);
         computeLocalMap(local_map_gen, local_map_rec);    
+
+        // Apply any pending transform corrections BEFORE updating prev_odom_
+        this->applyCorrectionToPoses();
 
         // Predict the current pose
         Eigen::Isometry3d pred_odom = odom_ * (prev_odom_.inverse() * odom_);
@@ -396,7 +408,6 @@ bool LaserOdometer::getBaseToLaserTf (const std::string& frame_id) {
                            laser_to_base_tf.transform.rotation.y,
                            laser_to_base_tf.transform.rotation.z);
   laser_to_base_.linear() = q_aux.toRotationMatrix();
-
   return true;
 }
 
@@ -463,6 +474,87 @@ void LaserOdometer::publishOdom(const std_msgs::msg::Header& header, const Eigen
     transform.transform.rotation.w = q_current.w();
 
     tf_broadcaster_->sendTransform(transform);
+  }
+}
+
+bool LaserOdometer::handleTransformCorrection(const std::shared_ptr<liodom::srv::TransformCorrection::Request> request,
+                                              std::shared_ptr<liodom::srv::TransformCorrection::Response> response) {
+  
+  // Convert the transform message to Eigen::Isometry3d
+  Eigen::Vector3d translation(
+    request->transform.translation.x,
+    request->transform.translation.y,
+    request->transform.translation.z
+  );
+  
+  Eigen::Quaterniond rotation(
+    request->transform.rotation.w,
+    request->transform.rotation.x,
+    request->transform.rotation.y,
+    request->transform.rotation.z
+  );
+  
+  Eigen::Isometry3d correction = Eigen::Isometry3d::Identity();
+  correction.translation() = translation;
+  correction.linear() = rotation.toRotationMatrix();
+
+  // Lock the mutex and update the correction offset
+  {
+    std::lock_guard<std::mutex> lock(correction_mutex_);
+    correction_offset_ = correction;
+  }
+  
+  // Set the pending flag with release semantics to ensure visibility
+  correction_pending_.store(true, std::memory_order_release);
+  
+
+  RCLCPP_INFO(nh_->get_logger(), "Received transform correction: translation [%.3f, %.3f, %.3f], rotation matrix:\n[%.3f %.3f %.3f]\n[%.3f %.3f %.3f]\n[%.3f %.3f %.3f]",
+              translation.x(), translation.y(), translation.z(),
+              rotation.toRotationMatrix()(0,0), rotation.toRotationMatrix()(0,1), rotation.toRotationMatrix()(0,2),
+              rotation.toRotationMatrix()(1,0), rotation.toRotationMatrix()(1,1), rotation.toRotationMatrix()(1,2),
+              rotation.toRotationMatrix()(2,0), rotation.toRotationMatrix()(2,1), rotation.toRotationMatrix()(2,2));
+  response->success = true;
+  response->message = "Transform correction applied successfully";
+  return true;
+}
+
+void LaserOdometer::applyCorrectionToPoses() {
+  if (correction_pending_.load(std::memory_order_acquire)) {  
+    RCLCPP_INFO(nh_->get_logger(), "applyCorrectionToPoses: correction_pending_ = %s", correction_pending_.load(std::memory_order_acquire) ? "true" : "false");
+
+    // Lock the mutex and copy correction_offset_ into a local variable
+    Eigen::Isometry3d correction_offset_local;
+    {
+      std::lock_guard<std::mutex> lock(correction_mutex_);
+      correction_offset_local = correction_offset_;
+    }
+
+    // Extract 2D rotation and translation from correction_offset_local
+    Eigen::Matrix2d R2d = correction_offset_local.linear().block<2,2>(0,0);
+    Eigen::Vector2d t2d = correction_offset_local.translation().head<2>();
+
+    // Apply 2D correction to odom_ and prev_odom_ (only x and y)
+    Eigen::Vector2d odom_xy(odom_.translation().x(), odom_.translation().y());
+    Eigen::Vector2d prev_odom_xy(prev_odom_.translation().x(), prev_odom_.translation().y());
+
+    Eigen::Vector2d corrected_odom_xy = R2d * odom_xy + t2d;
+    Eigen::Vector2d corrected_prev_odom_xy = R2d * prev_odom_xy + t2d;
+
+    odom_.translation().x() = corrected_odom_xy.x();
+    odom_.translation().y() = corrected_odom_xy.y();
+    // odom_.translation().z() remains unchanged
+
+    prev_odom_.translation().x() = corrected_prev_odom_xy.x();
+    prev_odom_.translation().y() = corrected_prev_odom_xy.y();
+    // prev_odom_.translation().z() remains unchanged
+
+    // Reset the flag after applying correction
+    correction_pending_.store(false, std::memory_order_release);
+
+    RCLCPP_INFO(nh_->get_logger(), "odom_ translation after correction: [%.3f, %.3f, %.3f]",
+                odom_.translation().x(),
+                odom_.translation().y(),
+                odom_.translation().z());
   }
 }
 

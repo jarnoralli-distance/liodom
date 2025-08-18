@@ -22,6 +22,8 @@
 
 #include <numeric>
 #include <thread>
+#include <atomic>
+#include <mutex>
 
 // Ceres
 #include <ceres/ceres.h>
@@ -35,6 +37,8 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
+#include <geometry_msgs/msg/transform.hpp>
+#include <liodom/srv/transform_correction.hpp>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2/exceptions.h>
@@ -90,6 +94,7 @@ class LaserOdometer {
   rclcpp::Node::SharedPtr nh_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr twist_pub_;
+  rclcpp::Service<liodom::srv::TransformCorrection>::SharedPtr correction_service_;
   std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
@@ -98,6 +103,9 @@ class LaserOdometer {
   bool init_;
   Eigen::Isometry3d prev_odom_;
   Eigen::Isometry3d odom_;
+  Eigen::Isometry3d correction_offset_;
+  std::atomic<bool> correction_pending_;
+  mutable std::mutex correction_mutex_;
   double prev_stamp_;  
   double param_q[4] = {0, 0, 0, 1};
   double param_t[3] = {0, 0, 0};
@@ -123,6 +131,9 @@ class LaserOdometer {
                           ceres::LossFunction* loss);
   bool getBaseToLaserTf(const std::string& frame_id);
   void publishOdom(const std_msgs::msg::Header& header, const Eigen::Isometry3d& pose);
+  bool handleTransformCorrection(const std::shared_ptr<liodom::srv::TransformCorrection::Request> request,
+                                std::shared_ptr<liodom::srv::TransformCorrection::Response> response);
+  void applyCorrectionToPoses();
 };
 
 }  // namespace liodom

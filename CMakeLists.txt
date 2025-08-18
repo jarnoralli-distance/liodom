@@ -33,6 +33,13 @@ find_package(tf2_eigen REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(pcl_ros REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+
+# Generate services
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "srv/TransformCorrection.srv"
+  DEPENDENCIES geometry_msgs
+)
 
 ###########
 ## Build ##
@@ -70,6 +77,7 @@ target_link_libraries(
         PCL::PCL
         Ceres::ceres
         OpenMP::OpenMP_CXX
+        ${PROJECT_NAME}__rosidl_typesupport_cpp
 )
 
 #### Laser Mapping ####
@@ -106,6 +114,7 @@ install(TARGETS
     liodom_mapping
     DESTINATION lib/${PROJECT_NAME}
 )
+
 
 install(DIRECTORY 
     launch

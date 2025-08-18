@@ -1,0 +1,8 @@
+# Transform correction service
+# Request: the transform correction to apply
+geometry_msgs/Transform transform
+
+---
+# Response: success status
+bool success
+string message 
