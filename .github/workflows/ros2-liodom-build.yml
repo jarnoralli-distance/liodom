@@ -1,0 +1,64 @@
+name: ROS2 Liodom Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Add ROS 2 apt sources
+        run: |
+            sudo apt install software-properties-common
+            sudo add-apt-repository universe
+            sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.asc -o /etc/apt/trusted.gpg.d/ros.asc
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/trusted.gpg.d/ros.asc] http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+
+      - name: Install packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ros-kilted-desktop \
+            ros-kilted-pcl-ros \
+            ros-kilted-pcl-conversions \
+            build-essential \
+            python3 \
+            python-is-python3 \
+            pipx \
+            cmake \
+            libudev-dev \
+            python3-colcon-common-extensions \
+            ros-kilted-ament-cmake
+
+      - name: Install Conan and detect compilers
+        run: |
+          pipx install conan
+          conan profile detect
+
+      - name: Setup ROS2 workspace
+        run: |
+          mkdir -p my_workspace/src
+          ln -s $GITHUB_WORKSPACE my_workspace/src/liodom
+
+      - name: Install dependencies with Conan
+        run: |
+          cd my_workspace
+          conan install src/liodom --output-folder=build/liodom --build=missing
+
+      - name: Build with colcon
+        run: |
+          source /opt/ros/kilted/setup.bash
+          cd my_workspace
+          colcon build --packages-select liodom \
+            --cmake-args \
+              -DCMAKE_TOOLCHAIN_FILE=${PWD}/build/liodom/conan_toolchain.cmake \
+              -DCMAKE_BUILD_TYPE=Release
+

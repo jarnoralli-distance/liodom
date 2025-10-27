@@ -1,0 +1,14 @@
+[requires]
+pcl/1.13.1
+eigen/3.4.0
+ceres-solver/2.0.0
+
+[generators]
+CMakeToolchain
+CMakeDeps
+
+[options]
+ceres-solver/*:shared=False
+pcl/*:shared=False
+eigen/*:shared=False
+
