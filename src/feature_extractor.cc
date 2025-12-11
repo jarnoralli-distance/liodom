@@ -170,6 +170,10 @@ void FeatureExtractor::splitPointCloud(const PointCloud::Ptr& pc_in, std::vector
           continue;
         }
 
+        // Negate x and y before pushing back
+        auto point = pc_in->at(col, row);
+        point.x = -point.x;
+        point.y = -point.y;
         // Adding the point to the corresponding scan        
         scans[row]->push_back(pc_in->at(col, row));
       }

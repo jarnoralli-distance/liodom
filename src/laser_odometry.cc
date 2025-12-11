@@ -221,6 +221,7 @@ void LaserOdometer::operator()(std::atomic<bool>& running) {
           options.linear_solver_type = ceres::DENSE_QR;
           options.max_num_iterations = 4;
           options.minimizer_progress_to_stdout = false;
+          options.logging_type = ceres::SILENT;
           options.num_threads = sysconf( _SC_NPROCESSORS_ONLN );          
           ceres::Solver::Summary summary;
           ceres::Solve(options, &problem, &summary);
