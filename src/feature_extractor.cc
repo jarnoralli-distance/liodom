@@ -175,7 +175,7 @@ void FeatureExtractor::splitPointCloud(const PointCloud::Ptr& pc_in, std::vector
         point.x = -point.x;
         point.y = -point.y;
         // Adding the point to the corresponding scan        
-        scans[row]->push_back(pc_in->at(col, row));
+        scans[row]->push_back(point);
       }
     }
   } else {
