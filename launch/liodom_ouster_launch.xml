@@ -5,6 +5,7 @@
   <arg name="use_imu" default="false" />
   <arg name="scan_regions" default="8" />
   <arg name="edges_per_region" default="10" />
+  <arg name="publish_tf" default="false" />
   <!-- Liodom -->
   <node pkg="liodom"
         exec="liodom_node"
@@ -27,7 +28,7 @@
     <param name="save_results" value="true" />
     <param name="save_results_dir" value="/home/emilio/Escritorio/results/" />
     <param name="mapping" value="$(var mapping)" />
-    <param name="publish_tf" value="true" />
+    <param name="publish_tf" value="$(var publish_tf)" />
     <param name="use_sim_time" value="true"/>
     
     <remap from="points" to="/ouster/points" />
