@@ -1,5 +1,4 @@
 <launch>
-
   <arg name="mapping" default="true" />  
   <arg name="use_imu" default="false" />
   <arg name="scan_regions" default="8" />
@@ -7,7 +6,8 @@
   <arg name="publish_tf" default="false" />
   <arg name="use_sim_time" default="true" />
   <arg name="save_results" default="true" />
-  <arg name="save_results_dir" default="/tmp//" />
+  <arg name="save_results_dir" default="/tmp/save_results/" />
+  <arg name="viz" default="false" />
 
   <!-- Liodom -->
   <node pkg="liodom"
@@ -28,11 +28,11 @@
     <param name="base_frame" value="base_link" />
     <param name="laser_frame" value="" />
     <param name="use_imu" value="false" />
-    <param name="save_results" value="$(arg save_results)" />
-    <param name="save_results_dir" value="$(arg save_results_dir)" />
-    <param name="mapping" value="$(arg mapping)" />
-    <param name="publish_tf" value="$(arg publish_tf)" />
-    <param name="use_sim_time" value="$(arg use_sim_time)"/>
+    <param name="save_results" value="$(var save_results)" />
+    <param name="save_results_dir" value="$(var save_results_dir)" />
+    <param name="mapping" value="$(var mapping)" />
+    <param name="publish_tf" value="$(var publish_tf)" />
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
     
     <remap from="points" to="/os_cloud_node/points" />
     <remap from="map" to="/liodom_mapper/map_local" />
@@ -63,14 +63,14 @@
   </group> 
 
   <node pkg="tf2_ros"
-        type="static_transform_publisher"
+        exec="static_transform_publisher"
 	      name="map2odom"
 	      args="0 0 0 0 0 0 map odom" >
         <param name="use_sim_time" value="true"/>
   </node>
 
   <node pkg="tf2_ros" 
-        type="static_transform_publisher" 
+        exec="static_transform_publisher" 
 	      name="bl2os1"
 	      args="0 0 0 0 0 0 base_link os_sensor" >
         <param name="use_sim_time" value="true"/>
